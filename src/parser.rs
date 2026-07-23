@@ -1,5 +1,6 @@
 use crate::{Error, Number, Value};
 use alloc::string::String;
+use alloc::vec::Vec;
 
 pub(crate) struct Parser<'a> {
     input: &'a [u8],
@@ -76,6 +77,7 @@ impl<'a> Parser<'a> {
             Some(b'f') => self.expect_literal("false", Value::Bool(false)),
             Some(b'-' | b'0'..=b'9') => self.parse_number(),
             Some(b'"') => self.parse_string().map(Value::String),
+            Some(b'[') => self.parse_array(),
             Some(other) => {
                 Err(self.error(alloc::format!("unexpected character `{}`", other as char)))
             }
@@ -239,6 +241,31 @@ impl<'a> Parser<'a> {
             _ => return Err(self.error("invalid escape sequence")),
         }
         Ok(())
+    }
+
+    /// Parses a JSON array per RFC 8259 §5, assuming the opening `[` has
+    /// not yet been consumed.
+    fn parse_array(&mut self) -> Result<Value, Error> {
+        self.bump(); // opening `[`
+        let mut items = Vec::new();
+
+        self.skip_whitespace();
+        if self.peek() == Some(b']') {
+            self.bump();
+            return Ok(Value::Array(items));
+        }
+
+        loop {
+            items.push(self.parse_value()?);
+            self.skip_whitespace();
+            match self.bump() {
+                Some(b',') => {
+                    self.skip_whitespace();
+                }
+                Some(b']') => return Ok(Value::Array(items)),
+                _ => return Err(self.error("expected `,` or `]` in array")),
+            }
+        }
     }
 
     fn parse_hex4(&mut self) -> Result<u16, Error> {
@@ -436,5 +463,49 @@ mod tests {
     #[test]
     fn rejects_invalid_escape() {
         assert!(Parser::parse(r#""\x41""#).is_err());
+    }
+
+    #[test]
+    fn parses_empty_array() {
+        assert_eq!(Parser::parse("[]").unwrap(), Value::Array(Vec::new()));
+        assert_eq!(Parser::parse("[  ]").unwrap(), Value::Array(Vec::new()));
+    }
+
+    #[test]
+    fn parses_array_of_values() {
+        assert_eq!(
+            Parser::parse("[1, 2, 3]").unwrap(),
+            Value::Array(alloc::vec![
+                Value::Number(Number::from(1u64)),
+                Value::Number(Number::from(2u64)),
+                Value::Number(Number::from(3u64)),
+            ])
+        );
+    }
+
+    #[test]
+    fn parses_nested_arrays() {
+        assert_eq!(
+            Parser::parse("[[1], []]").unwrap(),
+            Value::Array(alloc::vec![
+                Value::Array(alloc::vec![Value::Number(Number::from(1u64))]),
+                Value::Array(Vec::new()),
+            ])
+        );
+    }
+
+    #[test]
+    fn rejects_trailing_comma_in_array() {
+        assert!(Parser::parse("[1,]").is_err());
+    }
+
+    #[test]
+    fn rejects_missing_comma_in_array() {
+        assert!(Parser::parse("[1 2]").is_err());
+    }
+
+    #[test]
+    fn rejects_unterminated_array() {
+        assert!(Parser::parse("[1, 2").is_err());
     }
 }
