@@ -9,8 +9,16 @@ extern crate alloc;
 
 mod error;
 mod number;
+mod parser;
 mod value;
 
 pub use error::Error;
 pub use number::Number;
 pub use value::{Map, Value};
+
+use parser::Parser;
+
+/// Parses a JSON value from a string slice.
+pub fn from_str(s: &str) -> Result<Value, Error> {
+    Parser::parse(s)
+}
