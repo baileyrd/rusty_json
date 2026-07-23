@@ -12,6 +12,7 @@ mod macros;
 mod number;
 mod parser;
 mod ser;
+mod serde_support;
 mod value;
 
 pub use error::{Category, Error};

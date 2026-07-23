@@ -111,8 +111,10 @@ impl fmt::Display for Error {
     }
 }
 
-#[cfg(feature = "std")]
-impl std::error::Error for Error {}
+// Unconditional (not gated behind the `std` feature): `core::error::Error`
+// is itself no_std-compatible, and `serde::ser::Error` requires it as a
+// supertrait regardless of serde's own `std` feature.
+impl core::error::Error for Error {}
 
 impl serde::de::Error for Error {
     fn custom<T: fmt::Display>(msg: T) -> Self {
