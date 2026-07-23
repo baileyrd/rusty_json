@@ -1,14 +1,6 @@
-use crate::Number;
-use alloc::collections::BTreeMap;
+use crate::{Map, Number};
 use alloc::string::String;
 use alloc::vec::Vec;
-
-/// An owned JSON object: a string-keyed map of [`Value`]s.
-///
-/// Backed by a `BTreeMap`, so iteration order is key-sorted rather than
-/// insertion order (this matches `serde_json::Value`'s default behavior
-/// without its `preserve_order` feature).
-pub type Map = BTreeMap<String, Value>;
 
 /// A JSON value: one of the six kinds defined by
 /// [RFC 8259 §3](https://www.rfc-editor.org/rfc/rfc8259#section-3).
