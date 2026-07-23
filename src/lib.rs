@@ -9,6 +9,8 @@ extern crate alloc;
 
 mod error;
 mod number;
+mod value;
 
 pub use error::Error;
 pub use number::Number;
+pub use value::{Map, Value};
