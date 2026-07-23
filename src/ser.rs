@@ -1,3 +1,4 @@
+use crate::formatter::{CharEscape, CompactFormatter, Formatter, PrettyFormatter};
 use crate::{Error, Number};
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
@@ -11,13 +12,7 @@ pub fn to_string<T>(value: &T) -> Result<String, Error>
 where
     T: Serialize + ?Sized,
 {
-    let mut serializer = Serializer {
-        output: String::new(),
-        pretty: false,
-        indent: 0,
-    };
-    value.serialize(&mut serializer)?;
-    Ok(serializer.output)
+    to_string_with_formatter(value, CompactFormatter)
 }
 
 /// Serializes any `Serialize` value to a pretty-printed JSON string,
@@ -27,13 +22,19 @@ pub fn to_string_pretty<T>(value: &T) -> Result<String, Error>
 where
     T: Serialize + ?Sized,
 {
-    let mut serializer = Serializer {
-        output: String::new(),
-        pretty: true,
-        indent: 0,
-    };
+    to_string_with_formatter(value, PrettyFormatter::new())
+}
+
+/// Serializes any `Serialize` value to a JSON string using a custom
+/// [`Formatter`] (e.g. custom indentation, HTML-safe escaping).
+pub fn to_string_with_formatter<T, F>(value: &T, formatter: F) -> Result<String, Error>
+where
+    T: Serialize + ?Sized,
+    F: Formatter,
+{
+    let mut serializer = Serializer::with_formatter(formatter);
     value.serialize(&mut serializer)?;
-    Ok(serializer.output)
+    Ok(serializer.into_string())
 }
 
 /// Serializes any `Serialize` value to a compact JSON byte vector.
@@ -76,62 +77,85 @@ where
     Ok(())
 }
 
-struct Serializer {
+/// A `serde::Serializer` writing JSON into an in-memory `String`, with
+/// syntax (whitespace, indentation, escaping) controlled by a [`Formatter`]
+/// (defaulting to [`CompactFormatter`], matching [`to_string`]). Construct
+/// via [`Serializer::with_formatter`] to plug in a custom one.
+pub struct Serializer<F = CompactFormatter> {
     output: String,
-    pretty: bool,
-    indent: usize,
+    formatter: F,
 }
 
-impl Serializer {
-    fn newline_and_indent(&mut self) {
-        if self.pretty {
-            self.output.push('\n');
-            for _ in 0..self.indent {
-                self.output.push_str("  ");
-            }
-        }
+impl Serializer<CompactFormatter> {
+    /// A serializer producing compact output, same as [`to_string`].
+    pub fn new() -> Self {
+        Serializer::with_formatter(CompactFormatter)
     }
 }
 
-fn write_escaped_string(s: &str, out: &mut String) {
-    out.push('"');
-    for c in s.chars() {
-        match c {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\u{0008}' => out.push_str("\\b"),
-            '\u{000C}' => out.push_str("\\f"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            c if (c as u32) < 0x20 => {
-                out.push_str(&alloc::format!("\\u{:04x}", c as u32));
-            }
-            c => out.push(c),
+impl Default for Serializer<CompactFormatter> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<F: Formatter> Serializer<F> {
+    /// A serializer using a custom [`Formatter`].
+    pub fn with_formatter(formatter: F) -> Self {
+        Serializer {
+            output: String::new(),
+            formatter,
         }
     }
-    out.push('"');
+
+    /// Consumes the serializer, returning the JSON text written so far.
+    pub fn into_string(self) -> String {
+        self.output
+    }
 }
 
-/// Serializes a JSON number, delegating non-finite floats to `null` (JSON
-/// has no way to represent them), same as `Value::from(f64)`.
-fn write_number(n: Number, out: &mut String) {
-    out.push_str(&n.to_string());
+fn write_escaped_str<F: Formatter>(formatter: &mut F, out: &mut String, value: &str) {
+    formatter.begin_string(out);
+    let mut start = 0;
+    for (i, c) in value.char_indices() {
+        let escape = match c {
+            '"' => Some(CharEscape::Quote),
+            '\\' => Some(CharEscape::ReverseSolidus),
+            '\u{0008}' => Some(CharEscape::Backspace),
+            '\u{000C}' => Some(CharEscape::FormFeed),
+            '\n' => Some(CharEscape::LineFeed),
+            '\r' => Some(CharEscape::CarriageReturn),
+            '\t' => Some(CharEscape::Tab),
+            c if (c as u32) < 0x20 => Some(CharEscape::AsciiControl(c as u8)),
+            _ => None,
+        };
+        if let Some(escape) = escape {
+            if start < i {
+                formatter.write_string_fragment(out, &value[start..i]);
+            }
+            formatter.write_char_escape(out, escape);
+            start = i + c.len_utf8();
+        }
+    }
+    if start < value.len() {
+        formatter.write_string_fragment(out, &value[start..]);
+    }
+    formatter.end_string(out);
 }
 
-impl<'a> ser::Serializer for &'a mut Serializer {
+impl<'a, F: Formatter> ser::Serializer for &'a mut Serializer<F> {
     type Ok = ();
     type Error = Error;
-    type SerializeSeq = Compound<'a>;
-    type SerializeTuple = Compound<'a>;
-    type SerializeTupleStruct = Compound<'a>;
-    type SerializeTupleVariant = Compound<'a>;
-    type SerializeMap = Compound<'a>;
-    type SerializeStruct = Compound<'a>;
-    type SerializeStructVariant = Compound<'a>;
+    type SerializeSeq = Compound<'a, F>;
+    type SerializeTuple = Compound<'a, F>;
+    type SerializeTupleStruct = Compound<'a, F>;
+    type SerializeTupleVariant = Compound<'a, F>;
+    type SerializeMap = Compound<'a, F>;
+    type SerializeStruct = Compound<'a, F>;
+    type SerializeStructVariant = Compound<'a, F>;
 
     fn serialize_bool(self, v: bool) -> Result<(), Error> {
-        self.output.push_str(if v { "true" } else { "false" });
+        self.formatter.write_bool(&mut self.output, v);
         Ok(())
     }
 
@@ -145,13 +169,15 @@ impl<'a> ser::Serializer for &'a mut Serializer {
         self.serialize_i64(i64::from(v))
     }
     fn serialize_i64(self, v: i64) -> Result<(), Error> {
-        write_number(Number::from(v), &mut self.output);
+        self.formatter
+            .write_number_str(&mut self.output, &Number::from(v).to_string());
         Ok(())
     }
     fn serialize_i128(self, v: i128) -> Result<(), Error> {
         match Number::from_i128(v) {
             Some(n) => {
-                write_number(n, &mut self.output);
+                self.formatter
+                    .write_number_str(&mut self.output, &n.to_string());
                 Ok(())
             }
             None => Err(<Error as ser::Error>::custom("i128 value out of range")),
@@ -168,13 +194,15 @@ impl<'a> ser::Serializer for &'a mut Serializer {
         self.serialize_u64(u64::from(v))
     }
     fn serialize_u64(self, v: u64) -> Result<(), Error> {
-        write_number(Number::from(v), &mut self.output);
+        self.formatter
+            .write_number_str(&mut self.output, &Number::from(v).to_string());
         Ok(())
     }
     fn serialize_u128(self, v: u128) -> Result<(), Error> {
         match Number::from_u128(v) {
             Some(n) => {
-                write_number(n, &mut self.output);
+                self.formatter
+                    .write_number_str(&mut self.output, &n.to_string());
                 Ok(())
             }
             None => Err(<Error as ser::Error>::custom("u128 value out of range")),
@@ -186,8 +214,10 @@ impl<'a> ser::Serializer for &'a mut Serializer {
     }
     fn serialize_f64(self, v: f64) -> Result<(), Error> {
         match Number::from_f64(v) {
-            Some(n) => write_number(n, &mut self.output),
-            None => self.output.push_str("null"),
+            Some(n) => self
+                .formatter
+                .write_number_str(&mut self.output, &n.to_string()),
+            None => self.formatter.write_null(&mut self.output),
         }
         Ok(())
     }
@@ -198,7 +228,7 @@ impl<'a> ser::Serializer for &'a mut Serializer {
     }
 
     fn serialize_str(self, v: &str) -> Result<(), Error> {
-        write_escaped_string(v, &mut self.output);
+        write_escaped_str(&mut self.formatter, &mut self.output, v);
         Ok(())
     }
 
@@ -213,7 +243,7 @@ impl<'a> ser::Serializer for &'a mut Serializer {
     }
 
     fn serialize_none(self) -> Result<(), Error> {
-        self.output.push_str("null");
+        self.formatter.write_null(&mut self.output);
         Ok(())
     }
 
@@ -222,7 +252,7 @@ impl<'a> ser::Serializer for &'a mut Serializer {
     }
 
     fn serialize_unit(self) -> Result<(), Error> {
-        self.output.push_str("null");
+        self.formatter.write_null(&mut self.output);
         Ok(())
     }
 
@@ -254,20 +284,14 @@ impl<'a> ser::Serializer for &'a mut Serializer {
         variant: &'static str,
         value: &T,
     ) -> Result<(), Error> {
-        self.output.push('{');
-        write_escaped_string(variant, &mut self.output);
-        self.output.push(':');
-        if self.pretty {
-            self.output.push(' ');
-        }
+        self.begin_variant_envelope(variant);
         value.serialize(&mut *self)?;
-        self.output.push('}');
+        self.end_variant_envelope();
         Ok(())
     }
 
-    fn serialize_seq(self, _len: Option<usize>) -> Result<Compound<'a>, Error> {
-        self.output.push('[');
-        self.indent += 1;
+    fn serialize_seq(self, _len: Option<usize>) -> Result<Compound<'a, F>, Error> {
+        self.formatter.begin_array(&mut self.output);
         Ok(Compound {
             ser: self,
             first: true,
@@ -275,7 +299,7 @@ impl<'a> ser::Serializer for &'a mut Serializer {
         })
     }
 
-    fn serialize_tuple(self, len: usize) -> Result<Compound<'a>, Error> {
+    fn serialize_tuple(self, len: usize) -> Result<Compound<'a, F>, Error> {
         self.serialize_seq(Some(len))
     }
 
@@ -283,7 +307,7 @@ impl<'a> ser::Serializer for &'a mut Serializer {
         self,
         _name: &'static str,
         len: usize,
-    ) -> Result<Compound<'a>, Error> {
+    ) -> Result<Compound<'a, F>, Error> {
         self.serialize_seq(Some(len))
     }
 
@@ -293,15 +317,9 @@ impl<'a> ser::Serializer for &'a mut Serializer {
         _variant_index: u32,
         variant: &'static str,
         _len: usize,
-    ) -> Result<Compound<'a>, Error> {
-        self.output.push('{');
-        write_escaped_string(variant, &mut self.output);
-        self.output.push(':');
-        if self.pretty {
-            self.output.push(' ');
-        }
-        self.output.push('[');
-        self.indent += 1;
+    ) -> Result<Compound<'a, F>, Error> {
+        self.begin_variant_envelope(variant);
+        self.formatter.begin_array(&mut self.output);
         Ok(Compound {
             ser: self,
             first: true,
@@ -309,9 +327,8 @@ impl<'a> ser::Serializer for &'a mut Serializer {
         })
     }
 
-    fn serialize_map(self, _len: Option<usize>) -> Result<Compound<'a>, Error> {
-        self.output.push('{');
-        self.indent += 1;
+    fn serialize_map(self, _len: Option<usize>) -> Result<Compound<'a, F>, Error> {
+        self.formatter.begin_object(&mut self.output);
         Ok(Compound {
             ser: self,
             first: true,
@@ -319,7 +336,7 @@ impl<'a> ser::Serializer for &'a mut Serializer {
         })
     }
 
-    fn serialize_struct(self, _name: &'static str, len: usize) -> Result<Compound<'a>, Error> {
+    fn serialize_struct(self, _name: &'static str, len: usize) -> Result<Compound<'a, F>, Error> {
         self.serialize_map(Some(len))
     }
 
@@ -329,15 +346,9 @@ impl<'a> ser::Serializer for &'a mut Serializer {
         _variant_index: u32,
         variant: &'static str,
         _len: usize,
-    ) -> Result<Compound<'a>, Error> {
-        self.output.push('{');
-        write_escaped_string(variant, &mut self.output);
-        self.output.push(':');
-        if self.pretty {
-            self.output.push(' ');
-        }
-        self.output.push('{');
-        self.indent += 1;
+    ) -> Result<Compound<'a, F>, Error> {
+        self.begin_variant_envelope(variant);
+        self.formatter.begin_object(&mut self.output);
         Ok(Compound {
             ser: self,
             first: true,
@@ -350,8 +361,26 @@ impl<'a> ser::Serializer for &'a mut Serializer {
     }
 }
 
+impl<F: Formatter> Serializer<F> {
+    /// Starts the `{"variant": ` envelope wrapping a newtype/tuple/struct
+    /// enum variant's payload.
+    fn begin_variant_envelope(&mut self, variant: &str) {
+        self.formatter.begin_object(&mut self.output);
+        self.formatter.begin_object_key(&mut self.output, true);
+        write_escaped_str(&mut self.formatter, &mut self.output, variant);
+        self.formatter.end_object_key(&mut self.output);
+        self.formatter.begin_object_value(&mut self.output);
+    }
+
+    /// Closes the envelope opened by [`Self::begin_variant_envelope`].
+    fn end_variant_envelope(&mut self) {
+        self.formatter.end_object_value(&mut self.output);
+        self.formatter.end_object(&mut self.output, false);
+    }
+}
+
 /// What an enum-variant compound wraps its inner `[...]`/`{...}` with, once
-/// it closes: an extra `}` to finish the `{"variant": ...}` envelope.
+/// it closes: the rest of the `{"variant": ...}` envelope.
 enum Wrap {
     Array,
     Object,
@@ -360,51 +389,50 @@ enum Wrap {
 /// The shared implementation behind every `Serialize{Seq,Tuple,TupleStruct,
 /// TupleVariant,Map,Struct,StructVariant}` — all of them are either a
 /// comma-separated `[...]` / `{...}`, optionally wrapped in an enum-variant
-/// envelope.
-pub(crate) struct Compound<'a> {
-    ser: &'a mut Serializer,
+/// envelope. Not constructible directly; produced by [`Serializer`]'s
+/// `serde::Serializer` impl.
+pub struct Compound<'a, F> {
+    ser: &'a mut Serializer<F>,
     first: bool,
     wrap: Option<Wrap>,
 }
 
-impl Compound<'_> {
-    fn write_separator(&mut self) {
-        if !self.first {
-            self.ser.output.push(',');
+impl<F: Formatter> Compound<'_, F> {
+    fn close(self, array: bool) -> Result<(), Error> {
+        let empty = self.first;
+        if array {
+            self.ser.formatter.end_array(&mut self.ser.output, empty);
+        } else {
+            self.ser.formatter.end_object(&mut self.ser.output, empty);
         }
-        self.first = false;
-        self.ser.newline_and_indent();
-    }
-
-    fn close(self, bracket: char) -> Result<(), Error> {
-        self.ser.indent -= 1;
-        if !self.first {
-            self.ser.newline_and_indent();
-        }
-        self.ser.output.push(bracket);
         match self.wrap {
-            Some(Wrap::Array) | Some(Wrap::Object) => self.ser.output.push('}'),
+            Some(Wrap::Array) | Some(Wrap::Object) => self.ser.end_variant_envelope(),
             None => {}
         }
         Ok(())
     }
 }
 
-impl SerializeSeq for Compound<'_> {
+impl<F: Formatter> SerializeSeq for Compound<'_, F> {
     type Ok = ();
     type Error = Error;
 
     fn serialize_element<T: ?Sized + Serialize>(&mut self, value: &T) -> Result<(), Error> {
-        self.write_separator();
-        value.serialize(&mut *self.ser)
+        self.ser
+            .formatter
+            .begin_array_value(&mut self.ser.output, self.first);
+        self.first = false;
+        value.serialize(&mut *self.ser)?;
+        self.ser.formatter.end_array_value(&mut self.ser.output);
+        Ok(())
     }
 
     fn end(self) -> Result<(), Error> {
-        self.close(']')
+        self.close(true)
     }
 }
 
-impl SerializeTuple for Compound<'_> {
+impl<F: Formatter> SerializeTuple for Compound<'_, F> {
     type Ok = ();
     type Error = Error;
 
@@ -413,11 +441,11 @@ impl SerializeTuple for Compound<'_> {
     }
 
     fn end(self) -> Result<(), Error> {
-        self.close(']')
+        self.close(true)
     }
 }
 
-impl SerializeTupleStruct for Compound<'_> {
+impl<F: Formatter> SerializeTupleStruct for Compound<'_, F> {
     type Ok = ();
     type Error = Error;
 
@@ -426,11 +454,11 @@ impl SerializeTupleStruct for Compound<'_> {
     }
 
     fn end(self) -> Result<(), Error> {
-        self.close(']')
+        self.close(true)
     }
 }
 
-impl SerializeTupleVariant for Compound<'_> {
+impl<F: Formatter> SerializeTupleVariant for Compound<'_, F> {
     type Ok = ();
     type Error = Error;
 
@@ -439,38 +467,41 @@ impl SerializeTupleVariant for Compound<'_> {
     }
 
     fn end(self) -> Result<(), Error> {
-        self.close(']')
+        self.close(true)
     }
 }
 
-impl SerializeMap for Compound<'_> {
+impl<F: Formatter> SerializeMap for Compound<'_, F> {
     type Ok = ();
     type Error = Error;
 
     fn serialize_key<T: ?Sized + Serialize>(&mut self, key: &T) -> Result<(), Error> {
-        self.write_separator();
+        self.ser
+            .formatter
+            .begin_object_key(&mut self.ser.output, self.first);
+        self.first = false;
         let mut key_str = String::new();
         key.serialize(MapKeySerializer {
             output: &mut key_str,
         })?;
-        write_escaped_string(&key_str, &mut self.ser.output);
+        write_escaped_str(&mut self.ser.formatter, &mut self.ser.output, &key_str);
+        self.ser.formatter.end_object_key(&mut self.ser.output);
         Ok(())
     }
 
     fn serialize_value<T: ?Sized + Serialize>(&mut self, value: &T) -> Result<(), Error> {
-        self.ser.output.push(':');
-        if self.ser.pretty {
-            self.ser.output.push(' ');
-        }
-        value.serialize(&mut *self.ser)
+        self.ser.formatter.begin_object_value(&mut self.ser.output);
+        value.serialize(&mut *self.ser)?;
+        self.ser.formatter.end_object_value(&mut self.ser.output);
+        Ok(())
     }
 
     fn end(self) -> Result<(), Error> {
-        self.close('}')
+        self.close(false)
     }
 }
 
-impl SerializeStruct for Compound<'_> {
+impl<F: Formatter> SerializeStruct for Compound<'_, F> {
     type Ok = ();
     type Error = Error;
 
@@ -479,21 +510,24 @@ impl SerializeStruct for Compound<'_> {
         key: &'static str,
         value: &T,
     ) -> Result<(), Error> {
-        self.write_separator();
-        write_escaped_string(key, &mut self.ser.output);
-        self.ser.output.push(':');
-        if self.ser.pretty {
-            self.ser.output.push(' ');
-        }
-        value.serialize(&mut *self.ser)
+        self.ser
+            .formatter
+            .begin_object_key(&mut self.ser.output, self.first);
+        self.first = false;
+        write_escaped_str(&mut self.ser.formatter, &mut self.ser.output, key);
+        self.ser.formatter.end_object_key(&mut self.ser.output);
+        self.ser.formatter.begin_object_value(&mut self.ser.output);
+        value.serialize(&mut *self.ser)?;
+        self.ser.formatter.end_object_value(&mut self.ser.output);
+        Ok(())
     }
 
     fn end(self) -> Result<(), Error> {
-        self.close('}')
+        self.close(false)
     }
 }
 
-impl SerializeStructVariant for Compound<'_> {
+impl<F: Formatter> SerializeStructVariant for Compound<'_, F> {
     type Ok = ();
     type Error = Error;
 
@@ -506,7 +540,7 @@ impl SerializeStructVariant for Compound<'_> {
     }
 
     fn end(self) -> Result<(), Error> {
-        self.close('}')
+        self.close(false)
     }
 }
 
@@ -811,6 +845,18 @@ mod tests {
     }
 
     #[test]
+    fn pretty_prints_enum_variants() {
+        assert_eq!(
+            to_string_pretty(&Shape::Newtype(5)).unwrap(),
+            "{\n  \"Newtype\": 5\n}"
+        );
+        assert_eq!(
+            to_string_pretty(&Shape::Tuple(1, 2)).unwrap(),
+            "{\n  \"Tuple\": [\n    1,\n    2\n  ]\n}"
+        );
+    }
+
+    #[test]
     fn serializes_option_and_collections() {
         assert_eq!(to_string(&Some(5i32)).unwrap(), "5");
         assert_eq!(to_string(&Option::<i32>::None).unwrap(), "null");
@@ -870,5 +916,58 @@ mod tests {
         }
         let err = to_writer(FailingWriter, &Value::Null).unwrap_err();
         assert!(err.is_io());
+    }
+
+    /// A custom formatter: same as compact, but always renders array/object
+    /// separators with a trailing space after the comma (`, `/`: `),
+    /// proving `Formatter` is genuinely pluggable end-to-end.
+    #[derive(Default)]
+    struct SpacedFormatter;
+
+    impl Formatter for SpacedFormatter {
+        fn begin_array_value(&mut self, out: &mut String, first: bool) {
+            if !first {
+                out.push_str(", ");
+            }
+        }
+
+        fn begin_object_key(&mut self, out: &mut String, first: bool) {
+            if !first {
+                out.push_str(", ");
+            }
+        }
+
+        fn begin_object_value(&mut self, out: &mut String) {
+            out.push_str(": ");
+        }
+    }
+
+    #[test]
+    fn custom_formatter_is_used() {
+        let arr = Value::Array(alloc::vec![
+            Value::Number(Number::from(1u64)),
+            Value::Number(Number::from(2u64)),
+        ]);
+        assert_eq!(
+            to_string_with_formatter(&arr, SpacedFormatter).unwrap(),
+            "[1, 2]"
+        );
+
+        let mut map = Map::new();
+        map.insert(AString::from("a"), Value::Number(Number::from(1u64)));
+        map.insert(AString::from("b"), Value::Number(Number::from(2u64)));
+        assert_eq!(
+            to_string_with_formatter(&Value::Object(map), SpacedFormatter).unwrap(),
+            r#"{"a": 1, "b": 2}"#
+        );
+    }
+
+    #[test]
+    fn pretty_formatter_with_custom_indent_width() {
+        let arr = Value::Array(alloc::vec![Value::Number(Number::from(1u64))]);
+        assert_eq!(
+            to_string_with_formatter(&arr, PrettyFormatter::with_indent_width(4)).unwrap(),
+            "[\n    1\n]"
+        );
     }
 }

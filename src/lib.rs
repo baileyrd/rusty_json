@@ -9,6 +9,7 @@ extern crate alloc;
 
 mod de;
 mod error;
+mod formatter;
 mod macros;
 mod number;
 mod parser;
@@ -17,6 +18,7 @@ mod serde_support;
 mod value;
 
 pub use error::{Category, Error};
+pub use formatter::{CharEscape, CompactFormatter, Formatter, PrettyFormatter};
 pub use number::Number;
 pub use value::{Map, Value};
 
@@ -24,7 +26,10 @@ pub use value::{Map, Value};
 pub type Result<T> = core::result::Result<T, Error>;
 
 pub use de::{from_slice, from_str, StreamDeserializer};
-pub use ser::{to_string, to_string_pretty, to_vec, to_vec_pretty};
+pub use ser::{
+    to_string, to_string_pretty, to_string_with_formatter, to_vec, to_vec_pretty, Compound,
+    Serializer,
+};
 
 #[cfg(feature = "std")]
 pub use de::from_reader;
