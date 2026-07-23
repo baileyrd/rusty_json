@@ -1,4 +1,4 @@
-use crate::{Error, Number, Value};
+use crate::{Error, Map, Number, Value};
 use alloc::string::String;
 use alloc::vec::Vec;
 
@@ -78,6 +78,7 @@ impl<'a> Parser<'a> {
             Some(b'-' | b'0'..=b'9') => self.parse_number(),
             Some(b'"') => self.parse_string().map(Value::String),
             Some(b'[') => self.parse_array(),
+            Some(b'{') => self.parse_object(),
             Some(other) => {
                 Err(self.error(alloc::format!("unexpected character `{}`", other as char)))
             }
@@ -264,6 +265,43 @@ impl<'a> Parser<'a> {
                 }
                 Some(b']') => return Ok(Value::Array(items)),
                 _ => return Err(self.error("expected `,` or `]` in array")),
+            }
+        }
+    }
+
+    /// Parses a JSON object per RFC 8259 §4, assuming the opening `{` has
+    /// not yet been consumed. Duplicate keys follow last-write-wins, same
+    /// as `serde_json`'s default (non-`preserve_order`) behavior.
+    fn parse_object(&mut self) -> Result<Value, Error> {
+        self.bump(); // opening `{`
+        let mut map = Map::new();
+
+        self.skip_whitespace();
+        if self.peek() == Some(b'}') {
+            self.bump();
+            return Ok(Value::Object(map));
+        }
+
+        loop {
+            self.skip_whitespace();
+            if self.peek() != Some(b'"') {
+                return Err(self.error("expected string key in object"));
+            }
+            let key = self.parse_string()?;
+
+            self.skip_whitespace();
+            if self.bump() != Some(b':') {
+                return Err(self.error("expected `:` after object key"));
+            }
+
+            let value = self.parse_value()?;
+            map.insert(key, value);
+
+            self.skip_whitespace();
+            match self.bump() {
+                Some(b',') => {}
+                Some(b'}') => return Ok(Value::Object(map)),
+                _ => return Err(self.error("expected `,` or `}` in object")),
             }
         }
     }
@@ -507,5 +545,81 @@ mod tests {
     #[test]
     fn rejects_unterminated_array() {
         assert!(Parser::parse("[1, 2").is_err());
+    }
+
+    #[test]
+    fn parses_empty_object() {
+        assert_eq!(Parser::parse("{}").unwrap(), Value::Object(Map::new()));
+        assert_eq!(Parser::parse("{ }").unwrap(), Value::Object(Map::new()));
+    }
+
+    #[test]
+    fn parses_object_with_entries() {
+        let mut expected = Map::new();
+        expected.insert(
+            alloc::string::String::from("a"),
+            Value::Number(Number::from(1u64)),
+        );
+        expected.insert(alloc::string::String::from("b"), Value::Bool(true));
+        assert_eq!(
+            Parser::parse(r#"{"a": 1, "b": true}"#).unwrap(),
+            Value::Object(expected)
+        );
+    }
+
+    #[test]
+    fn parses_nested_object() {
+        assert_eq!(
+            Parser::parse(r#"{"outer": {"inner": [1, 2]}}"#).unwrap(),
+            Value::Object({
+                let mut m = Map::new();
+                m.insert(
+                    alloc::string::String::from("outer"),
+                    Value::Object({
+                        let mut inner = Map::new();
+                        inner.insert(
+                            alloc::string::String::from("inner"),
+                            Value::Array(alloc::vec![
+                                Value::Number(Number::from(1u64)),
+                                Value::Number(Number::from(2u64)),
+                            ]),
+                        );
+                        inner
+                    }),
+                );
+                m
+            })
+        );
+    }
+
+    #[test]
+    fn duplicate_keys_last_write_wins() {
+        let v = Parser::parse(r#"{"a": 1, "a": 2}"#).unwrap();
+        let mut expected = Map::new();
+        expected.insert(
+            alloc::string::String::from("a"),
+            Value::Number(Number::from(2u64)),
+        );
+        assert_eq!(v, Value::Object(expected));
+    }
+
+    #[test]
+    fn rejects_non_string_key() {
+        assert!(Parser::parse("{1: 2}").is_err());
+    }
+
+    #[test]
+    fn rejects_missing_colon() {
+        assert!(Parser::parse(r#"{"a" 1}"#).is_err());
+    }
+
+    #[test]
+    fn rejects_trailing_comma_in_object() {
+        assert!(Parser::parse(r#"{"a": 1,}"#).is_err());
+    }
+
+    #[test]
+    fn rejects_unterminated_object() {
+        assert!(Parser::parse(r#"{"a": 1"#).is_err());
     }
 }
