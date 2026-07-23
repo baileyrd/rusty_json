@@ -1,6 +1,5 @@
-use crate::{Error, Map, Number, Value};
+use crate::{Error, Number, Value};
 use alloc::string::String;
-use alloc::vec::Vec;
 
 pub(crate) struct Parser<'a> {
     input: &'a [u8],
@@ -19,23 +18,11 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// Parses a complete JSON document: one value, optionally surrounded by
-    /// whitespace, with nothing left over afterward.
-    pub(crate) fn parse(input: &'a str) -> Result<Value, Error> {
-        let mut parser = Parser::new(input);
-        let value = parser.parse_value()?;
-        parser.skip_whitespace();
-        if parser.pos != parser.input.len() {
-            return Err(parser.error("trailing characters after JSON value"));
-        }
-        Ok(value)
-    }
-
-    fn peek(&self) -> Option<u8> {
+    pub(crate) fn peek(&self) -> Option<u8> {
         self.input.get(self.pos).copied()
     }
 
-    fn bump(&mut self) -> Option<u8> {
+    pub(crate) fn bump(&mut self) -> Option<u8> {
         let byte = self.peek()?;
         self.pos += 1;
         if byte == b'\n' {
@@ -47,52 +34,28 @@ impl<'a> Parser<'a> {
         Some(byte)
     }
 
-    fn error(&self, msg: impl Into<String>) -> Error {
+    pub(crate) fn error(&self, msg: impl Into<String>) -> Error {
         Error::new(msg, self.line, self.column)
     }
 
-    fn error_eof(&self, msg: impl Into<String>) -> Error {
+    pub(crate) fn error_eof(&self, msg: impl Into<String>) -> Error {
         Error::eof(msg, self.line, self.column)
     }
 
-    fn skip_whitespace(&mut self) {
+    pub(crate) fn skip_whitespace(&mut self) {
         while matches!(self.peek(), Some(b' ' | b'\t' | b'\n' | b'\r')) {
             self.bump();
         }
     }
 
-    fn expect_literal(&mut self, literal: &str, value: Value) -> Result<Value, Error> {
-        for expected in literal.bytes() {
-            match self.bump() {
-                Some(byte) if byte == expected => {}
-                _ => {
-                    return Err(self.error(alloc::format!("invalid literal, expected `{literal}`")))
-                }
-            }
-        }
-        Ok(value)
-    }
-
-    pub(crate) fn parse_value(&mut self) -> Result<Value, Error> {
-        self.skip_whitespace();
-        match self.peek() {
-            Some(b'n') => self.expect_literal("null", Value::Null),
-            Some(b't') => self.expect_literal("true", Value::Bool(true)),
-            Some(b'f') => self.expect_literal("false", Value::Bool(false)),
-            Some(b'-' | b'0'..=b'9') => self.parse_number(),
-            Some(b'"') => self.parse_string().map(Value::String),
-            Some(b'[') => self.parse_array(),
-            Some(b'{') => self.parse_object(),
-            Some(other) => {
-                Err(self.error(alloc::format!("unexpected character `{}`", other as char)))
-            }
-            None => Err(self.error_eof("unexpected end of input")),
-        }
+    /// True if the cursor has consumed the entire input.
+    pub(crate) fn at_end(&self) -> bool {
+        self.pos == self.input.len()
     }
 
     /// Parses a JSON number per RFC 8259 §6:
     /// `number = [ "-" ] int [ frac ] [ exp ]`.
-    fn parse_number(&mut self) -> Result<Value, Error> {
+    pub(crate) fn parse_number(&mut self) -> Result<Value, Error> {
         let start = self.pos;
 
         if self.peek() == Some(b'-') {
@@ -173,7 +136,7 @@ impl<'a> Parser<'a> {
 
     /// Parses a JSON string per RFC 8259 §7, assuming the opening `"` has
     /// not yet been consumed.
-    fn parse_string(&mut self) -> Result<String, Error> {
+    pub(crate) fn parse_string(&mut self) -> Result<String, Error> {
         self.bump(); // opening quote
         let mut out = String::new();
         loop {
@@ -248,74 +211,6 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
-    /// Parses a JSON array per RFC 8259 §5, assuming the opening `[` has
-    /// not yet been consumed.
-    fn parse_array(&mut self) -> Result<Value, Error> {
-        self.bump(); // opening `[`
-        let mut items = Vec::new();
-
-        self.skip_whitespace();
-        if self.peek() == Some(b']') {
-            self.bump();
-            return Ok(Value::Array(items));
-        }
-
-        loop {
-            items.push(self.parse_value()?);
-            self.skip_whitespace();
-            match self.bump() {
-                Some(b',') => {
-                    self.skip_whitespace();
-                }
-                Some(b']') => return Ok(Value::Array(items)),
-                None => return Err(self.error_eof("unexpected end of input in array")),
-                _ => return Err(self.error("expected `,` or `]` in array")),
-            }
-        }
-    }
-
-    /// Parses a JSON object per RFC 8259 §4, assuming the opening `{` has
-    /// not yet been consumed. Duplicate keys follow last-write-wins, same
-    /// as `serde_json`'s default (non-`preserve_order`) behavior.
-    fn parse_object(&mut self) -> Result<Value, Error> {
-        self.bump(); // opening `{`
-        let mut map = Map::new();
-
-        self.skip_whitespace();
-        if self.peek() == Some(b'}') {
-            self.bump();
-            return Ok(Value::Object(map));
-        }
-
-        loop {
-            self.skip_whitespace();
-            match self.peek() {
-                Some(b'"') => {}
-                None => return Err(self.error_eof("unexpected end of input in object")),
-                _ => return Err(self.error("expected string key in object")),
-            }
-            let key = self.parse_string()?;
-
-            self.skip_whitespace();
-            match self.bump() {
-                Some(b':') => {}
-                None => return Err(self.error_eof("unexpected end of input in object")),
-                _ => return Err(self.error("expected `:` after object key")),
-            }
-
-            let value = self.parse_value()?;
-            map.insert(key, value);
-
-            self.skip_whitespace();
-            match self.bump() {
-                Some(b',') => {}
-                Some(b'}') => return Ok(Value::Object(map)),
-                None => return Err(self.error_eof("unexpected end of input in object")),
-                _ => return Err(self.error("expected `,` or `}` in object")),
-            }
-        }
-    }
-
     fn parse_hex4(&mut self) -> Result<u16, Error> {
         let mut value: u16 = 0;
         for _ in 0..4 {
@@ -354,41 +249,49 @@ fn utf8_len(byte: u8) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Map;
+    use alloc::vec::Vec;
 
     #[test]
     fn parses_literals() {
-        assert_eq!(Parser::parse("null").unwrap(), Value::Null);
-        assert_eq!(Parser::parse("true").unwrap(), Value::Bool(true));
-        assert_eq!(Parser::parse("false").unwrap(), Value::Bool(false));
+        assert_eq!(crate::from_str::<Value>("null").unwrap(), Value::Null);
+        assert_eq!(crate::from_str::<Value>("true").unwrap(), Value::Bool(true));
+        assert_eq!(
+            crate::from_str::<Value>("false").unwrap(),
+            Value::Bool(false)
+        );
     }
 
     #[test]
     fn skips_surrounding_whitespace() {
-        assert_eq!(Parser::parse("  \n\t null  \r\n").unwrap(), Value::Null);
+        assert_eq!(
+            crate::from_str::<Value>("  \n\t null  \r\n").unwrap(),
+            Value::Null
+        );
     }
 
     #[test]
     fn rejects_invalid_literal() {
-        assert!(Parser::parse("nul").is_err());
-        assert!(Parser::parse("truee").is_err());
-        assert!(Parser::parse("nulll").is_err());
+        assert!(crate::from_str::<Value>("nul").is_err());
+        assert!(crate::from_str::<Value>("truee").is_err());
+        assert!(crate::from_str::<Value>("nulll").is_err());
     }
 
     #[test]
     fn rejects_empty_input() {
-        assert!(Parser::parse("").is_err());
-        assert!(Parser::parse("   ").is_err());
+        assert!(crate::from_str::<Value>("").is_err());
+        assert!(crate::from_str::<Value>("   ").is_err());
     }
 
     #[test]
     fn error_reports_line_and_column() {
-        let err = Parser::parse("\n\n  bogus").unwrap_err();
+        let err = crate::from_str::<Value>("\n\n  bogus").unwrap_err();
         assert_eq!(err.line(), 3);
         assert_eq!(err.column(), 3);
     }
 
     fn num(s: &str) -> Value {
-        Parser::parse(s).unwrap()
+        crate::from_str::<Value>(s).unwrap()
     }
 
     #[test]
@@ -423,18 +326,18 @@ mod tests {
 
     #[test]
     fn rejects_leading_zero() {
-        assert!(Parser::parse("01").is_err());
-        assert!(Parser::parse("-01").is_err());
+        assert!(crate::from_str::<Value>("01").is_err());
+        assert!(crate::from_str::<Value>("-01").is_err());
     }
 
     #[test]
     fn rejects_malformed_numbers() {
-        assert!(Parser::parse("-").is_err());
-        assert!(Parser::parse(".5").is_err());
-        assert!(Parser::parse("1.").is_err());
-        assert!(Parser::parse("1e").is_err());
-        assert!(Parser::parse("1e+").is_err());
-        assert!(Parser::parse("+1").is_err());
+        assert!(crate::from_str::<Value>("-").is_err());
+        assert!(crate::from_str::<Value>(".5").is_err());
+        assert!(crate::from_str::<Value>("1.").is_err());
+        assert!(crate::from_str::<Value>("1e").is_err());
+        assert!(crate::from_str::<Value>("1e+").is_err());
+        assert!(crate::from_str::<Value>("+1").is_err());
     }
 
     #[test]
@@ -448,7 +351,7 @@ mod tests {
     }
 
     fn s(input: &str) -> String {
-        match Parser::parse(input).unwrap() {
+        match crate::from_str::<Value>(input).unwrap() {
             Value::String(s) => s,
             other => panic!("expected a string, got {other:?}"),
         }
@@ -492,37 +395,43 @@ mod tests {
 
     #[test]
     fn rejects_unpaired_surrogate() {
-        assert!(Parser::parse(r#""\ud83d""#).is_err());
-        assert!(Parser::parse(r#""\ude00""#).is_err());
-        assert!(Parser::parse(r#""\ud83dX""#).is_err());
+        assert!(crate::from_str::<Value>(r#""\ud83d""#).is_err());
+        assert!(crate::from_str::<Value>(r#""\ude00""#).is_err());
+        assert!(crate::from_str::<Value>(r#""\ud83dX""#).is_err());
     }
 
     #[test]
     fn rejects_unescaped_control_char() {
-        assert!(Parser::parse("\"a\nb\"").is_err());
-        assert!(Parser::parse("\"a\tb\"").is_err());
+        assert!(crate::from_str::<Value>("\"a\nb\"").is_err());
+        assert!(crate::from_str::<Value>("\"a\tb\"").is_err());
     }
 
     #[test]
     fn rejects_unterminated_string() {
-        assert!(Parser::parse(r#""abc"#).is_err());
+        assert!(crate::from_str::<Value>(r#""abc"#).is_err());
     }
 
     #[test]
     fn rejects_invalid_escape() {
-        assert!(Parser::parse(r#""\x41""#).is_err());
+        assert!(crate::from_str::<Value>(r#""\x41""#).is_err());
     }
 
     #[test]
     fn parses_empty_array() {
-        assert_eq!(Parser::parse("[]").unwrap(), Value::Array(Vec::new()));
-        assert_eq!(Parser::parse("[  ]").unwrap(), Value::Array(Vec::new()));
+        assert_eq!(
+            crate::from_str::<Value>("[]").unwrap(),
+            Value::Array(Vec::new())
+        );
+        assert_eq!(
+            crate::from_str::<Value>("[  ]").unwrap(),
+            Value::Array(Vec::new())
+        );
     }
 
     #[test]
     fn parses_array_of_values() {
         assert_eq!(
-            Parser::parse("[1, 2, 3]").unwrap(),
+            crate::from_str::<Value>("[1, 2, 3]").unwrap(),
             Value::Array(alloc::vec![
                 Value::Number(Number::from(1u64)),
                 Value::Number(Number::from(2u64)),
@@ -534,7 +443,7 @@ mod tests {
     #[test]
     fn parses_nested_arrays() {
         assert_eq!(
-            Parser::parse("[[1], []]").unwrap(),
+            crate::from_str::<Value>("[[1], []]").unwrap(),
             Value::Array(alloc::vec![
                 Value::Array(alloc::vec![Value::Number(Number::from(1u64))]),
                 Value::Array(Vec::new()),
@@ -544,23 +453,29 @@ mod tests {
 
     #[test]
     fn rejects_trailing_comma_in_array() {
-        assert!(Parser::parse("[1,]").is_err());
+        assert!(crate::from_str::<Value>("[1,]").is_err());
     }
 
     #[test]
     fn rejects_missing_comma_in_array() {
-        assert!(Parser::parse("[1 2]").is_err());
+        assert!(crate::from_str::<Value>("[1 2]").is_err());
     }
 
     #[test]
     fn rejects_unterminated_array() {
-        assert!(Parser::parse("[1, 2").is_err());
+        assert!(crate::from_str::<Value>("[1, 2").is_err());
     }
 
     #[test]
     fn parses_empty_object() {
-        assert_eq!(Parser::parse("{}").unwrap(), Value::Object(Map::new()));
-        assert_eq!(Parser::parse("{ }").unwrap(), Value::Object(Map::new()));
+        assert_eq!(
+            crate::from_str::<Value>("{}").unwrap(),
+            Value::Object(Map::new())
+        );
+        assert_eq!(
+            crate::from_str::<Value>("{ }").unwrap(),
+            Value::Object(Map::new())
+        );
     }
 
     #[test]
@@ -572,7 +487,7 @@ mod tests {
         );
         expected.insert(alloc::string::String::from("b"), Value::Bool(true));
         assert_eq!(
-            Parser::parse(r#"{"a": 1, "b": true}"#).unwrap(),
+            crate::from_str::<Value>(r#"{"a": 1, "b": true}"#).unwrap(),
             Value::Object(expected)
         );
     }
@@ -580,7 +495,7 @@ mod tests {
     #[test]
     fn parses_nested_object() {
         assert_eq!(
-            Parser::parse(r#"{"outer": {"inner": [1, 2]}}"#).unwrap(),
+            crate::from_str::<Value>(r#"{"outer": {"inner": [1, 2]}}"#).unwrap(),
             Value::Object({
                 let mut m = Map::new();
                 m.insert(
@@ -604,7 +519,7 @@ mod tests {
 
     #[test]
     fn duplicate_keys_last_write_wins() {
-        let v = Parser::parse(r#"{"a": 1, "a": 2}"#).unwrap();
+        let v = crate::from_str::<Value>(r#"{"a": 1, "a": 2}"#).unwrap();
         let mut expected = Map::new();
         expected.insert(
             alloc::string::String::from("a"),
@@ -615,38 +530,40 @@ mod tests {
 
     #[test]
     fn rejects_non_string_key() {
-        assert!(Parser::parse("{1: 2}").is_err());
+        assert!(crate::from_str::<Value>("{1: 2}").is_err());
     }
 
     #[test]
     fn rejects_missing_colon() {
-        assert!(Parser::parse(r#"{"a" 1}"#).is_err());
+        assert!(crate::from_str::<Value>(r#"{"a" 1}"#).is_err());
     }
 
     #[test]
     fn rejects_trailing_comma_in_object() {
-        assert!(Parser::parse(r#"{"a": 1,}"#).is_err());
+        assert!(crate::from_str::<Value>(r#"{"a": 1,}"#).is_err());
     }
 
     #[test]
     fn rejects_unterminated_object() {
-        assert!(Parser::parse(r#"{"a": 1"#).is_err());
+        assert!(crate::from_str::<Value>(r#"{"a": 1"#).is_err());
     }
 
     #[test]
     fn eof_errors_classify_as_eof() {
-        assert!(Parser::parse("").unwrap_err().is_eof());
-        assert!(Parser::parse(r#""abc"#).unwrap_err().is_eof());
-        assert!(Parser::parse("[1, 2").unwrap_err().is_eof());
-        assert!(Parser::parse(r#"{"a": 1"#).unwrap_err().is_eof());
-        assert!(Parser::parse(r#"{"a""#).unwrap_err().is_eof());
-        assert!(Parser::parse(r#"{"a": 1,"#).unwrap_err().is_eof());
+        assert!(crate::from_str::<Value>("").unwrap_err().is_eof());
+        assert!(crate::from_str::<Value>(r#""abc"#).unwrap_err().is_eof());
+        assert!(crate::from_str::<Value>("[1, 2").unwrap_err().is_eof());
+        assert!(crate::from_str::<Value>(r#"{"a": 1"#).unwrap_err().is_eof());
+        assert!(crate::from_str::<Value>(r#"{"a""#).unwrap_err().is_eof());
+        assert!(crate::from_str::<Value>(r#"{"a": 1,"#)
+            .unwrap_err()
+            .is_eof());
     }
 
     #[test]
     fn non_eof_syntax_errors_classify_as_syntax() {
-        assert!(Parser::parse("nul").unwrap_err().is_syntax());
-        assert!(Parser::parse("[1 2]").unwrap_err().is_syntax());
-        assert!(Parser::parse("{1: 2}").unwrap_err().is_syntax());
+        assert!(crate::from_str::<Value>("nul").unwrap_err().is_syntax());
+        assert!(crate::from_str::<Value>("[1 2]").unwrap_err().is_syntax());
+        assert!(crate::from_str::<Value>("{1: 2}").unwrap_err().is_syntax());
     }
 }
