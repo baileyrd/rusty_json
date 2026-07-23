@@ -18,3 +18,4 @@ default = ["std"]
 std = []
 
 [dependencies]
+serde = { version = "1", default-features = false, features = ["alloc"] }
