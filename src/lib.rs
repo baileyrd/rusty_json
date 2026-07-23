@@ -8,6 +8,7 @@
 extern crate alloc;
 
 mod error;
+mod macros;
 mod number;
 mod parser;
 mod ser;
@@ -28,3 +29,10 @@ pub fn from_str(s: &str) -> Result<Value> {
 }
 
 pub use ser::{to_string, to_string_pretty};
+
+/// Not public API. Re-exports used by the [`json!`] macro's expansion so it
+/// works from downstream crates without them needing `extern crate alloc`.
+#[doc(hidden)]
+pub mod __private {
+    pub use alloc::vec;
+}
