@@ -7,6 +7,8 @@
 
 extern crate alloc;
 
+mod error;
 mod number;
 
+pub use error::Error;
 pub use number::Number;
