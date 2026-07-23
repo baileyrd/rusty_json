@@ -10,6 +10,7 @@ extern crate alloc;
 mod error;
 mod number;
 mod parser;
+mod ser;
 mod value;
 
 pub use error::Error;
@@ -22,3 +23,5 @@ use parser::Parser;
 pub fn from_str(s: &str) -> Result<Value, Error> {
     Parser::parse(s)
 }
+
+pub use ser::to_string;
