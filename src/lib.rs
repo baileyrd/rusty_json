@@ -23,9 +23,11 @@ pub use value::{Map, Value};
 /// Shorthand for `Result<T, Error>`, matching this crate's error type.
 pub type Result<T> = core::result::Result<T, Error>;
 
-pub use de::{from_slice, from_str};
+pub use de::{from_slice, from_str, StreamDeserializer};
 pub use ser::{to_string, to_string_pretty, to_vec, to_vec_pretty};
 
+#[cfg(feature = "std")]
+pub use de::from_reader;
 #[cfg(feature = "std")]
 pub use ser::{to_writer, to_writer_pretty};
 

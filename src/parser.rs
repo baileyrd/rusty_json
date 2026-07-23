@@ -53,6 +53,11 @@ impl<'a> Parser<'a> {
         self.pos == self.input.len()
     }
 
+    /// The number of input bytes consumed so far.
+    pub(crate) fn byte_pos(&self) -> usize {
+        self.pos
+    }
+
     /// Parses a JSON number per RFC 8259 §6:
     /// `number = [ "-" ] int [ frac ] [ exp ]`.
     pub(crate) fn parse_number(&mut self) -> Result<Value, Error> {
