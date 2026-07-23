@@ -198,6 +198,56 @@ impl Value {
     pub fn take(&mut self) -> Value {
         core::mem::take(self)
     }
+
+    /// Looks up a value by [RFC 6901](https://www.rfc-editor.org/rfc/rfc6901)
+    /// JSON Pointer, e.g. `value.pointer("/a/0/b")`. An empty pointer
+    /// returns `self`; a non-empty one that doesn't start with `/`, or
+    /// that doesn't resolve (missing key, out-of-bounds/non-numeric array
+    /// index, or a step through a scalar), returns `None`.
+    pub fn pointer(&self, pointer: &str) -> Option<&Value> {
+        if pointer.is_empty() {
+            return Some(self);
+        }
+        let rest = pointer.strip_prefix('/')?;
+        let mut target = self;
+        for token in rest.split('/') {
+            let token = unescape_pointer_token(token);
+            target = match target {
+                Value::Object(map) => map.get(token.as_str())?,
+                Value::Array(arr) => arr.get(token.parse::<usize>().ok()?)?,
+                _ => return None,
+            };
+        }
+        Some(target)
+    }
+
+    /// Mutable counterpart to [`Value::pointer`].
+    pub fn pointer_mut(&mut self, pointer: &str) -> Option<&mut Value> {
+        if pointer.is_empty() {
+            return Some(self);
+        }
+        let rest = pointer.strip_prefix('/')?;
+        let mut target = self;
+        for token in rest.split('/') {
+            let token = unescape_pointer_token(token);
+            target = match target {
+                Value::Object(map) => map.get_mut(token.as_str())?,
+                Value::Array(arr) => arr.get_mut(token.parse::<usize>().ok()?)?,
+                _ => return None,
+            };
+        }
+        Some(target)
+    }
+}
+
+/// Un-escapes a single JSON Pointer reference token: `~1` -> `/`, `~0` -> `~`
+/// (in that order, per RFC 6901).
+fn unescape_pointer_token(token: &str) -> String {
+    if token.contains('~') {
+        token.replace("~1", "/").replace("~0", "~")
+    } else {
+        String::from(token)
+    }
 }
 
 impl From<bool> for Value {
@@ -684,6 +734,50 @@ mod tests {
     fn index_mut_usize_panics_out_of_bounds() {
         let mut arr = Value::Array(Vec::new());
         arr[0] = Value::Null;
+    }
+
+    #[test]
+    fn pointer_empty_returns_self() {
+        let v = Value::Bool(true);
+        assert_eq!(v.pointer(""), Some(&v));
+    }
+
+    #[test]
+    fn pointer_walks_object_and_array() {
+        let mut inner = Map::new();
+        inner.insert(String::from("b"), Value::Bool(true));
+        let mut outer = Map::new();
+        outer.insert(
+            String::from("a"),
+            Value::Array(alloc::vec![Value::Object(inner)]),
+        );
+        let v = Value::Object(outer);
+
+        assert_eq!(v.pointer("/a/0/b"), Some(&Value::Bool(true)));
+        assert_eq!(v.pointer("/a/0/missing"), None);
+        assert_eq!(v.pointer("/a/5"), None);
+        assert_eq!(v.pointer("/missing"), None);
+        assert_eq!(v.pointer("no-leading-slash"), None);
+    }
+
+    #[test]
+    fn pointer_unescapes_tilde_and_slash() {
+        let mut map = Map::new();
+        map.insert(String::from("a/b"), Value::Bool(true));
+        map.insert(String::from("c~d"), Value::Bool(false));
+        let v = Value::Object(map);
+        assert_eq!(v.pointer("/a~1b"), Some(&Value::Bool(true)));
+        assert_eq!(v.pointer("/c~0d"), Some(&Value::Bool(false)));
+    }
+
+    #[test]
+    fn pointer_mut_allows_in_place_edit() {
+        let mut map = Map::new();
+        map.insert(String::from("a"), Value::Bool(false));
+        let mut v = Value::Object(map);
+        *v.pointer_mut("/a").unwrap() = Value::Bool(true);
+        assert_eq!(v.pointer("/a"), Some(&Value::Bool(true)));
+        assert_eq!(v.pointer_mut("/missing"), None);
     }
 
     #[test]
