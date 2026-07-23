@@ -45,6 +45,9 @@ impl fmt::Display for Error {
     }
 }
 
+#[cfg(feature = "std")]
+impl std::error::Error for Error {}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -57,5 +60,14 @@ mod tests {
         assert_eq!(err.line(), 3);
         assert_eq!(err.column(), 7);
         assert_eq!(err.message(), "unexpected token");
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn composes_with_std_error() {
+        fn assert_is_std_error<E: std::error::Error>(_: &E) {}
+        let err = Error::new("bad token", 1, 1);
+        assert_is_std_error(&err);
+        let _boxed: alloc::boxed::Box<dyn std::error::Error> = alloc::boxed::Box::new(err);
     }
 }
