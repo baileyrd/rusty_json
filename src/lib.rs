@@ -19,8 +19,11 @@ pub use value::{Map, Value};
 
 use parser::Parser;
 
+/// Shorthand for `Result<T, Error>`, matching this crate's error type.
+pub type Result<T> = core::result::Result<T, Error>;
+
 /// Parses a JSON value from a string slice.
-pub fn from_str(s: &str) -> Result<Value, Error> {
+pub fn from_str(s: &str) -> Result<Value> {
     Parser::parse(s)
 }
 
