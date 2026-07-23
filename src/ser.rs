@@ -8,6 +8,58 @@ pub fn to_string(value: &Value) -> String {
     out
 }
 
+/// Serializes a [`Value`] to a pretty-printed JSON string, indented two
+/// spaces per level. Empty arrays/objects are rendered inline (`[]`, `{}`)
+/// rather than spread across lines.
+pub fn to_string_pretty(value: &Value) -> String {
+    let mut out = String::new();
+    write_value_pretty(value, &mut out, 0);
+    out
+}
+
+fn write_value_pretty(value: &Value, out: &mut String, indent: usize) {
+    match value {
+        Value::Array(items) if !items.is_empty() => {
+            out.push('[');
+            for (i, item) in items.iter().enumerate() {
+                if i > 0 {
+                    out.push(',');
+                }
+                out.push('\n');
+                push_indent(out, indent + 1);
+                write_value_pretty(item, out, indent + 1);
+            }
+            out.push('\n');
+            push_indent(out, indent);
+            out.push(']');
+        }
+        Value::Object(map) if !map.is_empty() => {
+            out.push('{');
+            for (i, (key, val)) in map.iter().enumerate() {
+                if i > 0 {
+                    out.push(',');
+                }
+                out.push('\n');
+                push_indent(out, indent + 1);
+                write_escaped_string(key, out);
+                out.push_str(": ");
+                write_value_pretty(val, out, indent + 1);
+            }
+            out.push('\n');
+            push_indent(out, indent);
+            out.push('}');
+        }
+        // Scalars and empty arrays/objects have no nesting to indent.
+        _ => write_value(value, out),
+    }
+}
+
+fn push_indent(out: &mut String, level: usize) {
+    for _ in 0..level {
+        out.push_str("  ");
+    }
+}
+
 fn write_value(value: &Value, out: &mut String) {
     match value {
         Value::Null => out.push_str("null"),
@@ -102,6 +154,46 @@ mod tests {
         let mut map = Map::new();
         map.insert(AString::from("a"), Value::Number(Number::from(1u64)));
         assert_eq!(to_string(&Value::Object(map)), r#"{"a":1}"#);
+    }
+
+    #[test]
+    fn pretty_prints_scalars_like_compact() {
+        assert_eq!(to_string_pretty(&Value::Null), "null");
+        assert_eq!(to_string_pretty(&Value::Number(Number::from(1u64))), "1");
+    }
+
+    #[test]
+    fn pretty_prints_empty_containers_inline() {
+        assert_eq!(to_string_pretty(&Value::Array(Vec::new())), "[]");
+        assert_eq!(to_string_pretty(&Value::Object(Map::new())), "{}");
+    }
+
+    #[test]
+    fn pretty_prints_array_with_indentation() {
+        let arr = Value::Array(alloc::vec![
+            Value::Number(Number::from(1u64)),
+            Value::Number(Number::from(2u64)),
+        ]);
+        assert_eq!(to_string_pretty(&arr), "[\n  1,\n  2\n]");
+    }
+
+    #[test]
+    fn pretty_prints_nested_object() {
+        let mut inner = Map::new();
+        inner.insert(AString::from("b"), Value::Bool(true));
+        let mut outer = Map::new();
+        outer.insert(AString::from("a"), Value::Object(inner));
+        assert_eq!(
+            to_string_pretty(&Value::Object(outer)),
+            "{\n  \"a\": {\n    \"b\": true\n  }\n}"
+        );
+    }
+
+    #[test]
+    fn pretty_output_round_trips() {
+        let value = from_str(r#"{"a":[1,2,{"b":null}]}"#).unwrap();
+        let pretty = to_string_pretty(&value);
+        assert_eq!(from_str(&pretty).unwrap(), value);
     }
 
     #[test]

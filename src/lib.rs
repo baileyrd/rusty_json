@@ -24,4 +24,4 @@ pub fn from_str(s: &str) -> Result<Value, Error> {
     Parser::parse(s)
 }
 
-pub use ser::to_string;
+pub use ser::{to_string, to_string_pretty};
