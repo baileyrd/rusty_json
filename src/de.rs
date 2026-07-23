@@ -230,7 +230,9 @@ impl<'de> de::Deserializer<'de> for &mut Parser<'de> {
         match self.peek() {
             Some(b'"') => {
                 let variant = self.parse_string()?;
-                visitor.visit_enum(variant.into_deserializer())
+                visitor.visit_enum(<String as IntoDeserializer<'de, Error>>::into_deserializer(
+                    variant,
+                ))
             }
             Some(b'{') => {
                 self.bump();
@@ -362,7 +364,9 @@ impl<'de, 'a> EnumAccess<'de> for EnumDeserializer<'a, 'de> {
     where
         V: DeserializeSeed<'de>,
     {
-        let value = seed.deserialize(self.variant.into_deserializer())?;
+        let value = seed.deserialize(
+            <String as IntoDeserializer<'de, Error>>::into_deserializer(self.variant),
+        )?;
         Ok((
             value,
             VariantDeserializer {

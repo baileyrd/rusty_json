@@ -1,5 +1,6 @@
 use crate::{Error, Number};
 use alloc::string::{String, ToString};
+use alloc::vec::Vec;
 use serde::ser::{
     self, Serialize, SerializeMap, SerializeSeq, SerializeStruct, SerializeStructVariant,
     SerializeTuple, SerializeTupleStruct, SerializeTupleVariant,
@@ -33,6 +34,46 @@ where
     };
     value.serialize(&mut serializer)?;
     Ok(serializer.output)
+}
+
+/// Serializes any `Serialize` value to a compact JSON byte vector.
+pub fn to_vec<T>(value: &T) -> Result<Vec<u8>, Error>
+where
+    T: Serialize + ?Sized,
+{
+    to_string(value).map(String::into_bytes)
+}
+
+/// Serializes any `Serialize` value to a pretty-printed JSON byte vector.
+pub fn to_vec_pretty<T>(value: &T) -> Result<Vec<u8>, Error>
+where
+    T: Serialize + ?Sized,
+{
+    to_string_pretty(value).map(String::into_bytes)
+}
+
+/// Serializes any `Serialize` value as compact JSON directly to a
+/// [`std::io::Write`] sink.
+#[cfg(feature = "std")]
+pub fn to_writer<W, T>(mut writer: W, value: &T) -> Result<(), Error>
+where
+    W: std::io::Write,
+    T: Serialize + ?Sized,
+{
+    writer.write_all(to_string(value)?.as_bytes())?;
+    Ok(())
+}
+
+/// Serializes any `Serialize` value as pretty-printed JSON directly to a
+/// [`std::io::Write`] sink.
+#[cfg(feature = "std")]
+pub fn to_writer_pretty<W, T>(mut writer: W, value: &T) -> Result<(), Error>
+where
+    W: std::io::Write,
+    T: Serialize + ?Sized,
+{
+    writer.write_all(to_string_pretty(value)?.as_bytes())?;
+    Ok(())
 }
 
 struct Serializer {
@@ -789,5 +830,45 @@ mod tests {
         let ours = to_string(&p).unwrap();
         let theirs = serde_json::to_string(&serde_json::json!({"x": 7, "y": 8})).unwrap();
         assert_eq!(ours, theirs);
+    }
+
+    #[test]
+    fn to_vec_matches_to_string_bytes() {
+        let v = Value::Array(alloc::vec![Value::Bool(true), Value::Null]);
+        assert_eq!(to_vec(&v).unwrap(), to_string(&v).unwrap().into_bytes());
+        assert_eq!(
+            to_vec_pretty(&v).unwrap(),
+            to_string_pretty(&v).unwrap().into_bytes()
+        );
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn to_writer_matches_to_string_bytes() {
+        let v = Value::Array(alloc::vec![Value::Bool(true), Value::Null]);
+
+        let mut buf = std::vec::Vec::new();
+        to_writer(&mut buf, &v).unwrap();
+        assert_eq!(buf, to_string(&v).unwrap().into_bytes());
+
+        let mut buf_pretty = std::vec::Vec::new();
+        to_writer_pretty(&mut buf_pretty, &v).unwrap();
+        assert_eq!(buf_pretty, to_string_pretty(&v).unwrap().into_bytes());
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn to_writer_propagates_io_errors() {
+        struct FailingWriter;
+        impl std::io::Write for FailingWriter {
+            fn write(&mut self, _buf: &[u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::other("boom"))
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let err = to_writer(FailingWriter, &Value::Null).unwrap_err();
+        assert!(err.is_io());
     }
 }
