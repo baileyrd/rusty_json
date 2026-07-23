@@ -296,6 +296,116 @@ impl core::str::FromStr for Value {
     }
 }
 
+macro_rules! impl_partial_eq_signed {
+    ($($ty:ty),*) => {
+        $(
+            impl PartialEq<$ty> for Value {
+                fn eq(&self, other: &$ty) -> bool {
+                    self.as_i64() == Some(*other as i64)
+                }
+            }
+            impl PartialEq<Value> for $ty {
+                fn eq(&self, other: &Value) -> bool {
+                    other == self
+                }
+            }
+        )*
+    };
+}
+
+impl_partial_eq_signed!(i8, i16, i32, i64, isize);
+
+macro_rules! impl_partial_eq_unsigned {
+    ($($ty:ty),*) => {
+        $(
+            impl PartialEq<$ty> for Value {
+                fn eq(&self, other: &$ty) -> bool {
+                    self.as_u64() == Some(*other as u64)
+                }
+            }
+            impl PartialEq<Value> for $ty {
+                fn eq(&self, other: &Value) -> bool {
+                    other == self
+                }
+            }
+        )*
+    };
+}
+
+impl_partial_eq_unsigned!(u8, u16, u32, u64, usize);
+
+impl PartialEq<f32> for Value {
+    fn eq(&self, other: &f32) -> bool {
+        self.as_f64() == Some(f64::from(*other))
+    }
+}
+
+impl PartialEq<Value> for f32 {
+    fn eq(&self, other: &Value) -> bool {
+        other == self
+    }
+}
+
+impl PartialEq<f64> for Value {
+    fn eq(&self, other: &f64) -> bool {
+        self.as_f64() == Some(*other)
+    }
+}
+
+impl PartialEq<Value> for f64 {
+    fn eq(&self, other: &Value) -> bool {
+        other == self
+    }
+}
+
+impl PartialEq<bool> for Value {
+    fn eq(&self, other: &bool) -> bool {
+        self.as_bool() == Some(*other)
+    }
+}
+
+impl PartialEq<Value> for bool {
+    fn eq(&self, other: &Value) -> bool {
+        other == self
+    }
+}
+
+impl PartialEq<str> for Value {
+    fn eq(&self, other: &str) -> bool {
+        self.as_str() == Some(other)
+    }
+}
+
+impl PartialEq<Value> for str {
+    fn eq(&self, other: &Value) -> bool {
+        other == self
+    }
+}
+
+impl PartialEq<&str> for Value {
+    fn eq(&self, other: &&str) -> bool {
+        self.as_str() == Some(*other)
+    }
+}
+
+impl PartialEq<Value> for &str {
+    fn eq(&self, other: &Value) -> bool {
+        other == self
+    }
+}
+
+impl PartialEq<String> for Value {
+    fn eq(&self, other: &String) -> bool {
+        self.as_str() == Some(other.as_str())
+    }
+}
+
+impl PartialEq<Value> for String {
+    fn eq(&self, other: &Value) -> bool {
+        other == self
+    }
+}
+
 impl core::ops::Index<&str> for Value {
     type Output = Value;
 
@@ -503,6 +613,27 @@ mod tests {
         );
         assert_eq!(Value::Null.as_array_mut(), None);
         assert_eq!(Value::Null.as_object_mut(), None);
+    }
+
+    #[test]
+    fn partial_eq_against_primitives() {
+        assert_eq!(Value::Bool(true), true);
+        assert_eq!(true, Value::Bool(true));
+        assert_ne!(Value::Bool(true), false);
+
+        assert_eq!(Value::Number(Number::from(42i64)), 42i64);
+        assert_eq!(42i64, Value::Number(Number::from(42i64)));
+        assert_eq!(Value::Number(Number::from(42u64)), 42u64);
+        assert_eq!(Value::Number(Number::from_f64(1.5).unwrap()), 1.5f64);
+
+        assert_eq!(Value::String(String::from("hi")), "hi");
+        assert_eq!("hi", Value::String(String::from("hi")));
+        assert_eq!(Value::String(String::from("hi")), String::from("hi"));
+        assert_eq!(String::from("hi"), Value::String(String::from("hi")));
+
+        assert_ne!(Value::Null, true);
+        assert_ne!(Value::Null, "hi");
+        assert_ne!(Value::Null, 0i64);
     }
 
     #[test]
