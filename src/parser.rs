@@ -51,6 +51,10 @@ impl<'a> Parser<'a> {
         Error::new(msg, self.line, self.column)
     }
 
+    fn error_eof(&self, msg: impl Into<String>) -> Error {
+        Error::eof(msg, self.line, self.column)
+    }
+
     fn skip_whitespace(&mut self) {
         while matches!(self.peek(), Some(b' ' | b'\t' | b'\n' | b'\r')) {
             self.bump();
@@ -82,7 +86,7 @@ impl<'a> Parser<'a> {
             Some(other) => {
                 Err(self.error(alloc::format!("unexpected character `{}`", other as char)))
             }
-            None => Err(self.error("unexpected end of input")),
+            None => Err(self.error_eof("unexpected end of input")),
         }
     }
 
@@ -174,7 +178,7 @@ impl<'a> Parser<'a> {
         let mut out = String::new();
         loop {
             match self.peek() {
-                None => return Err(self.error("unterminated string")),
+                None => return Err(self.error_eof("unterminated string")),
                 Some(b'"') => {
                     self.bump();
                     return Ok(out);
@@ -264,6 +268,7 @@ impl<'a> Parser<'a> {
                     self.skip_whitespace();
                 }
                 Some(b']') => return Ok(Value::Array(items)),
+                None => return Err(self.error_eof("unexpected end of input in array")),
                 _ => return Err(self.error("expected `,` or `]` in array")),
             }
         }
@@ -284,14 +289,18 @@ impl<'a> Parser<'a> {
 
         loop {
             self.skip_whitespace();
-            if self.peek() != Some(b'"') {
-                return Err(self.error("expected string key in object"));
+            match self.peek() {
+                Some(b'"') => {}
+                None => return Err(self.error_eof("unexpected end of input in object")),
+                _ => return Err(self.error("expected string key in object")),
             }
             let key = self.parse_string()?;
 
             self.skip_whitespace();
-            if self.bump() != Some(b':') {
-                return Err(self.error("expected `:` after object key"));
+            match self.bump() {
+                Some(b':') => {}
+                None => return Err(self.error_eof("unexpected end of input in object")),
+                _ => return Err(self.error("expected `:` after object key")),
             }
 
             let value = self.parse_value()?;
@@ -301,6 +310,7 @@ impl<'a> Parser<'a> {
             match self.bump() {
                 Some(b',') => {}
                 Some(b'}') => return Ok(Value::Object(map)),
+                None => return Err(self.error_eof("unexpected end of input in object")),
                 _ => return Err(self.error("expected `,` or `}` in object")),
             }
         }
@@ -311,7 +321,7 @@ impl<'a> Parser<'a> {
         for _ in 0..4 {
             let byte = self
                 .bump()
-                .ok_or_else(|| self.error("unexpected end of input in \\u escape"))?;
+                .ok_or_else(|| self.error_eof("unexpected end of input in \\u escape"))?;
             let digit = match byte {
                 b'0'..=b'9' => byte - b'0',
                 b'a'..=b'f' => byte - b'a' + 10,
@@ -621,5 +631,22 @@ mod tests {
     #[test]
     fn rejects_unterminated_object() {
         assert!(Parser::parse(r#"{"a": 1"#).is_err());
+    }
+
+    #[test]
+    fn eof_errors_classify_as_eof() {
+        assert!(Parser::parse("").unwrap_err().is_eof());
+        assert!(Parser::parse(r#""abc"#).unwrap_err().is_eof());
+        assert!(Parser::parse("[1, 2").unwrap_err().is_eof());
+        assert!(Parser::parse(r#"{"a": 1"#).unwrap_err().is_eof());
+        assert!(Parser::parse(r#"{"a""#).unwrap_err().is_eof());
+        assert!(Parser::parse(r#"{"a": 1,"#).unwrap_err().is_eof());
+    }
+
+    #[test]
+    fn non_eof_syntax_errors_classify_as_syntax() {
+        assert!(Parser::parse("nul").unwrap_err().is_syntax());
+        assert!(Parser::parse("[1 2]").unwrap_err().is_syntax());
+        assert!(Parser::parse("{1: 2}").unwrap_err().is_syntax());
     }
 }
