@@ -11,6 +11,7 @@ mod de;
 mod error;
 mod formatter;
 mod macros;
+mod map;
 mod number;
 mod parser;
 mod ser;
@@ -19,8 +20,12 @@ mod value;
 
 pub use error::{Category, Error};
 pub use formatter::{CharEscape, CompactFormatter, Formatter, PrettyFormatter};
+pub use map::{
+    Entry, IntoIter, IntoValues, Iter, IterMut, Keys, Map, OccupiedEntry, VacantEntry, Values,
+    ValuesMut,
+};
 pub use number::Number;
-pub use value::{Map, Value};
+pub use value::Value;
 
 /// Shorthand for `Result<T, Error>`, matching this crate's error type.
 pub type Result<T> = core::result::Result<T, Error>;
