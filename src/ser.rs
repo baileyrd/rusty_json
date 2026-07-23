@@ -711,9 +711,9 @@ mod tests {
 
     #[test]
     fn pretty_output_round_trips() {
-        let value = from_str(r#"{"a":[1,2,{"b":null}]}"#).unwrap();
+        let value = from_str::<Value>(r#"{"a":[1,2,{"b":null}]}"#).unwrap();
         let pretty = to_string_pretty(&value).unwrap();
-        assert_eq!(from_str(&pretty).unwrap(), value);
+        assert_eq!(from_str::<Value>(&pretty).unwrap(), value);
     }
 
     #[test]
@@ -728,9 +728,9 @@ mod tests {
             r#"{"a":1,"b":[true,null]}"#,
         ];
         for input in inputs {
-            let value = from_str(input).unwrap();
+            let value = from_str::<Value>(input).unwrap();
             let serialized = to_string(&value).unwrap();
-            let reparsed = from_str(&serialized).unwrap();
+            let reparsed = from_str::<Value>(&serialized).unwrap();
             assert_eq!(value, reparsed, "round-trip failed for {input}");
         }
     }
