@@ -54,6 +54,15 @@ impl Value {
         }
     }
 
+    /// Mutably looks up a key if this is an object, returning `None`
+    /// otherwise (including when the key is absent).
+    pub fn get_mut(&mut self, key: &str) -> Option<&mut Value> {
+        match self {
+            Value::Object(map) => map.get_mut(key),
+            _ => None,
+        }
+    }
+
     /// True if this is `Value::Null`.
     pub fn is_null(&self) -> bool {
         matches!(self, Value::Null)
@@ -142,6 +151,22 @@ impl Value {
         }
     }
 
+    /// Returns the inner array mutably, if this is `Value::Array`.
+    pub fn as_array_mut(&mut self) -> Option<&mut Vec<Value>> {
+        match self {
+            Value::Array(a) => Some(a),
+            _ => None,
+        }
+    }
+
+    /// Returns the inner object mutably, if this is `Value::Object`.
+    pub fn as_object_mut(&mut self) -> Option<&mut Map> {
+        match self {
+            Value::Object(m) => Some(m),
+            _ => None,
+        }
+    }
+
     /// Returns the number as an `i64`, if this is `Value::Number` and it
     /// fits without loss. See [`Number::as_i64`].
     pub fn as_i64(&self) -> Option<i64> {
@@ -167,6 +192,11 @@ impl Value {
             Value::Number(n) => Some(n.as_f64()),
             _ => None,
         }
+    }
+
+    /// Replaces `self` with `Value::Null`, returning the previous value.
+    pub fn take(&mut self) -> Value {
+        core::mem::take(self)
     }
 }
 
@@ -412,6 +442,41 @@ mod tests {
         assert_eq!(some, Value::Number(Number::from(42u32)));
         let none: Value = Option::<u32>::None.into();
         assert_eq!(none, Value::Null);
+    }
+
+    #[test]
+    fn take_replaces_with_null() {
+        let mut v = Value::Bool(true);
+        let taken = v.take();
+        assert_eq!(taken, Value::Bool(true));
+        assert_eq!(v, Value::Null);
+    }
+
+    #[test]
+    fn mutable_accessors() {
+        let mut map = Map::new();
+        map.insert(String::from("a"), Value::Bool(false));
+        let mut obj = Value::Object(map);
+
+        if let Some(v) = obj.get_mut("a") {
+            *v = Value::Bool(true);
+        }
+        assert_eq!(obj.get("a"), Some(&Value::Bool(true)));
+        assert_eq!(obj.get_mut("missing"), None);
+
+        obj.as_object_mut()
+            .unwrap()
+            .insert(String::from("b"), Value::Null);
+        assert_eq!(obj.get("b"), Some(&Value::Null));
+
+        let mut arr = Value::Array(alloc::vec![Value::Bool(false)]);
+        arr.as_array_mut().unwrap().push(Value::Null);
+        assert_eq!(
+            arr,
+            Value::Array(alloc::vec![Value::Bool(false), Value::Null])
+        );
+        assert_eq!(Value::Null.as_array_mut(), None);
+        assert_eq!(Value::Null.as_object_mut(), None);
     }
 
     #[test]
