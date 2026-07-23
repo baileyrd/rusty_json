@@ -46,6 +46,18 @@ impl Error {
         }
     }
 
+    /// A data-shape error: JSON parsed fine but didn't match what a
+    /// `Deserialize` impl expected. Has no meaningful position, since it's
+    /// raised after parsing succeeds; `line()`/`column()` are `0`.
+    fn data(msg: impl Into<String>) -> Self {
+        Error {
+            msg: msg.into(),
+            line: 0,
+            column: 0,
+            category: Category::Data,
+        }
+    }
+
     /// The 1-based line at which the error occurred.
     pub fn line(&self) -> usize {
         self.line
@@ -102,6 +114,18 @@ impl fmt::Display for Error {
 #[cfg(feature = "std")]
 impl std::error::Error for Error {}
 
+impl serde::de::Error for Error {
+    fn custom<T: fmt::Display>(msg: T) -> Self {
+        Error::data(alloc::format!("{msg}"))
+    }
+}
+
+impl serde::ser::Error for Error {
+    fn custom<T: fmt::Display>(msg: T) -> Self {
+        Error::data(alloc::format!("{msg}"))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -129,6 +153,17 @@ mod tests {
         assert_eq!(eof.classify(), Category::Eof);
         assert!(eof.is_eof());
         assert!(!eof.is_syntax());
+    }
+
+    #[test]
+    fn serde_custom_errors_classify_as_data() {
+        let de_err = <Error as serde::de::Error>::custom("bad shape");
+        assert!(de_err.is_data());
+        assert_eq!(de_err.line(), 0);
+        assert_eq!(de_err.column(), 0);
+
+        let ser_err = <Error as serde::ser::Error>::custom("cannot serialize");
+        assert!(ser_err.is_data());
     }
 
     #[cfg(feature = "std")]
