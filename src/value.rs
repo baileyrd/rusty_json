@@ -79,9 +79,35 @@ impl Value {
         matches!(self, Value::Array(_))
     }
 
+    /// True if this is a `Value::Number` constructed from an `i64` that
+    /// fits without loss. See [`Number::is_i64`].
+    pub fn is_i64(&self) -> bool {
+        matches!(self, Value::Number(n) if n.is_i64())
+    }
+
+    /// True if this is a `Value::Number` constructed from a `u64` that
+    /// fits without loss. See [`Number::is_u64`].
+    pub fn is_u64(&self) -> bool {
+        matches!(self, Value::Number(n) if n.is_u64())
+    }
+
+    /// True if this is a `Value::Number` constructed from a float. See
+    /// [`Number::is_f64`].
+    pub fn is_f64(&self) -> bool {
+        matches!(self, Value::Number(n) if n.is_f64())
+    }
+
     /// True if this is `Value::Object`.
     pub fn is_object(&self) -> bool {
         matches!(self, Value::Object(_))
+    }
+
+    /// Returns `Some(())` if this is `Value::Null`, else `None`.
+    pub fn as_null(&self) -> Option<()> {
+        match self {
+            Value::Null => Some(()),
+            _ => None,
+        }
     }
 
     /// Returns the inner `bool`, if this is `Value::Bool`.
@@ -261,7 +287,18 @@ mod tests {
         assert!(Value::String(String::from("x")).is_string());
         assert!(Value::Array(Vec::new()).is_array());
         assert!(Value::Object(Map::new()).is_object());
+        assert!(Value::Number(Number::from(1u64)).is_i64());
+        assert!(Value::Number(Number::from(1u64)).is_u64());
+        assert!(!Value::Number(Number::from(1u64)).is_f64());
+        assert!(Value::Number(Number::from_f64(1.0).unwrap()).is_f64());
+        assert!(!Value::Null.is_i64());
         assert!(!Value::Null.is_bool());
+    }
+
+    #[test]
+    fn as_null() {
+        assert_eq!(Value::Null.as_null(), Some(()));
+        assert_eq!(Value::Bool(false).as_null(), None);
     }
 
     #[test]
