@@ -5,9 +5,11 @@
 use crate::parser::Parser;
 use crate::{Error, Value};
 use alloc::string::String;
+use alloc::vec::Vec;
+use core::marker::PhantomData;
 use serde::de::{
-    self, Deserialize, DeserializeSeed, EnumAccess, IntoDeserializer, MapAccess, SeqAccess,
-    VariantAccess, Visitor,
+    self, Deserialize, DeserializeOwned, DeserializeSeed, EnumAccess, IntoDeserializer, MapAccess,
+    SeqAccess, VariantAccess, Visitor,
 };
 
 /// Deserializes an instance of `T` from a string slice.
@@ -31,6 +33,114 @@ where
 {
     let s = core::str::from_utf8(v).map_err(|_| Error::new("input is not valid utf-8", 1, 1))?;
     from_str(s)
+}
+
+/// Deserializes an instance of `T` from an [`std::io::Read`] source.
+///
+/// Reads the entire source into memory before deserializing (not an
+/// incremental/zero-copy reader) -- fine for typical request- or
+/// file-sized inputs, less ideal for unbounded streaming sources.
+#[cfg(feature = "std")]
+pub fn from_reader<R, T>(mut reader: R) -> Result<T, Error>
+where
+    R: std::io::Read,
+    T: DeserializeOwned,
+{
+    let mut buf = Vec::new();
+    reader.read_to_end(&mut buf)?;
+    from_slice(&buf)
+}
+
+/// Parses one JSON value from the start of `s`, without requiring the rest
+/// of `s` to be consumed. Returns the value and how many bytes it took.
+fn parse_one<'de, T>(s: &'de str) -> Result<(T, usize), Error>
+where
+    T: Deserialize<'de>,
+{
+    let mut parser = Parser::new(s);
+    let value = T::deserialize(&mut parser)?;
+    Ok((value, parser.byte_pos()))
+}
+
+/// An iterator over multiple whitespace-separated JSON values read from a
+/// single source (e.g. newline-delimited JSON). Reads its whole source into
+/// memory upfront (see [`from_reader`]'s note); the iterator itself is
+/// still lazy per-item.
+pub struct StreamDeserializer<T> {
+    buf: Vec<u8>,
+    pos: usize,
+    _marker: PhantomData<T>,
+}
+
+impl<T> StreamDeserializer<T> {
+    /// Iterates over the whitespace-separated JSON values in `s`.
+    // Named to match `serde_json::Deserializer::from_str`, not `FromStr`.
+    #[allow(clippy::should_implement_trait)]
+    pub fn from_str(s: &str) -> Self {
+        StreamDeserializer {
+            buf: Vec::from(s.as_bytes()),
+            pos: 0,
+            _marker: PhantomData,
+        }
+    }
+
+    /// Iterates over the whitespace-separated JSON values in `v`.
+    pub fn from_slice(v: &[u8]) -> Self {
+        StreamDeserializer {
+            buf: Vec::from(v),
+            pos: 0,
+            _marker: PhantomData,
+        }
+    }
+
+    /// Reads `reader` to completion, then iterates over the
+    /// whitespace-separated JSON values it contained.
+    #[cfg(feature = "std")]
+    pub fn from_reader<R: std::io::Read>(mut reader: R) -> Result<Self, Error> {
+        let mut buf = Vec::new();
+        reader.read_to_end(&mut buf)?;
+        Ok(StreamDeserializer {
+            buf,
+            pos: 0,
+            _marker: PhantomData,
+        })
+    }
+}
+
+impl<T: DeserializeOwned> Iterator for StreamDeserializer<T> {
+    type Item = Result<T, Error>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        while self.pos < self.buf.len()
+            && matches!(self.buf[self.pos], b' ' | b'\t' | b'\n' | b'\r')
+        {
+            self.pos += 1;
+        }
+        if self.pos >= self.buf.len() {
+            return None;
+        }
+        let s = match core::str::from_utf8(&self.buf[self.pos..]) {
+            Ok(s) => s,
+            Err(_) => {
+                // Can't know how many bytes to skip past invalid UTF-8, so
+                // fuse: don't retry the same unparseable bytes forever.
+                self.pos = self.buf.len();
+                return Some(Err(Error::new("input is not valid utf-8", 1, 1)));
+            }
+        };
+        match parse_one::<T>(s) {
+            Ok((value, consumed)) => {
+                self.pos += consumed;
+                Some(Ok(value))
+            }
+            Err(e) => {
+                // Fuse on error, same reasoning: the parser may have failed
+                // partway through, so there's no reliable resync point.
+                self.pos = self.buf.len();
+                Some(Err(e))
+            }
+        }
+    }
 }
 
 fn consume_literal(parser: &mut Parser, literal: &str) -> Result<(), Error> {
@@ -629,5 +739,76 @@ mod tests {
     fn from_slice_matches_from_str() {
         let v: Value = from_slice(br#"{"a":1}"#).unwrap();
         assert_eq!(v, from_str::<Value>(r#"{"a":1}"#).unwrap());
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn from_reader_matches_from_str() {
+        let v: Value = from_reader(r#"{"a":1}"#.as_bytes()).unwrap();
+        assert_eq!(v, from_str::<Value>(r#"{"a":1}"#).unwrap());
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn from_reader_propagates_io_errors() {
+        struct FailingReader;
+        impl std::io::Read for FailingReader {
+            fn read(&mut self, _buf: &mut [u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::other("boom"))
+            }
+        }
+        let err = from_reader::<_, Value>(FailingReader).unwrap_err();
+        assert!(err.is_io());
+    }
+
+    #[test]
+    fn stream_deserializer_yields_each_value() {
+        let values: Vec<i32> = StreamDeserializer::<i32>::from_str("1 2\n3   4")
+            .map(|r| r.unwrap())
+            .collect();
+        assert_eq!(values, alloc::vec![1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn stream_deserializer_stops_at_end() {
+        let mut it = StreamDeserializer::<i32>::from_str("1");
+        assert_eq!(it.next().unwrap().unwrap(), 1);
+        assert!(it.next().is_none());
+        assert!(it.next().is_none());
+    }
+
+    #[test]
+    fn stream_deserializer_fuses_on_error() {
+        // No reliable resync point after a bad token, so the iterator
+        // stops (rather than looping forever retrying the same bytes).
+        let mut it = StreamDeserializer::<i32>::from_str("1 bogus 3");
+        assert!(it.next().unwrap().is_ok());
+        assert!(it.next().unwrap().is_err());
+        assert!(it.next().is_none());
+    }
+
+    #[test]
+    fn stream_deserializer_from_slice_matches_from_str() {
+        let a: Vec<i32> = StreamDeserializer::<i32>::from_str("1 2 3")
+            .map(|r| r.unwrap())
+            .collect();
+        let b: Vec<i32> = StreamDeserializer::<i32>::from_slice(b"1 2 3")
+            .map(|r| r.unwrap())
+            .collect();
+        assert_eq!(a, b);
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn stream_deserializer_from_reader() {
+        let values: Vec<Point> =
+            StreamDeserializer::<Point>::from_reader(r#"{"x":1,"y":2}{"x":3,"y":4}"#.as_bytes())
+                .unwrap()
+                .map(|r| r.unwrap())
+                .collect();
+        assert_eq!(
+            values,
+            alloc::vec![Point { x: 1, y: 2 }, Point { x: 3, y: 4 }]
+        );
     }
 }
