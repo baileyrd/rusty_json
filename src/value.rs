@@ -144,6 +144,78 @@ impl Value {
     }
 }
 
+impl From<bool> for Value {
+    fn from(b: bool) -> Self {
+        Value::Bool(b)
+    }
+}
+
+macro_rules! impl_from_integer {
+    ($($ty:ty),*) => {
+        $(
+            impl From<$ty> for Value {
+                fn from(n: $ty) -> Self {
+                    Value::Number(Number::from(n))
+                }
+            }
+        )*
+    };
+}
+
+impl_from_integer!(u8, u16, u32, u64, usize, i8, i16, i32, i64, isize);
+
+impl From<f32> for Value {
+    /// `NaN` and infinities become `Value::Null`, since JSON has no way to
+    /// represent them (mirrors `serde_json::Value`'s `From<f32>`).
+    fn from(f: f32) -> Self {
+        Number::from_f64(f64::from(f)).map_or(Value::Null, Value::Number)
+    }
+}
+
+impl From<f64> for Value {
+    /// `NaN` and infinities become `Value::Null`, since JSON has no way to
+    /// represent them (mirrors `serde_json::Value`'s `From<f64>`).
+    fn from(f: f64) -> Self {
+        Number::from_f64(f).map_or(Value::Null, Value::Number)
+    }
+}
+
+impl From<Number> for Value {
+    fn from(n: Number) -> Self {
+        Value::Number(n)
+    }
+}
+
+impl From<String> for Value {
+    fn from(s: String) -> Self {
+        Value::String(s)
+    }
+}
+
+impl From<&str> for Value {
+    fn from(s: &str) -> Self {
+        Value::String(String::from(s))
+    }
+}
+
+impl From<Vec<Value>> for Value {
+    fn from(v: Vec<Value>) -> Self {
+        Value::Array(v)
+    }
+}
+
+impl From<Map> for Value {
+    fn from(m: Map) -> Self {
+        Value::Object(m)
+    }
+}
+
+impl<T: Into<Value>> From<Option<T>> for Value {
+    fn from(opt: Option<T>) -> Self {
+        opt.map_or(Value::Null, Into::into)
+    }
+}
+
 impl core::ops::Index<&str> for Value {
     type Output = Value;
 
@@ -233,5 +305,51 @@ mod tests {
         let arr = Value::Array(alloc::vec![Value::Bool(false)]);
         assert_eq!(arr[0], Value::Bool(false));
         assert_eq!(arr[5], Value::Null);
+    }
+
+    #[test]
+    fn from_bool_and_integers() {
+        assert_eq!(Value::from(true), Value::Bool(true));
+        assert_eq!(Value::from(42u32), Value::Number(Number::from(42u32)));
+        assert_eq!(Value::from(-7i64), Value::Number(Number::from(-7i64)));
+    }
+
+    #[test]
+    fn from_floats_maps_non_finite_to_null() {
+        assert_eq!(
+            Value::from(1.5f64),
+            Value::Number(Number::from_f64(1.5).unwrap())
+        );
+        assert_eq!(Value::from(f64::NAN), Value::Null);
+        assert_eq!(Value::from(f64::INFINITY), Value::Null);
+        assert_eq!(Value::from(f32::NAN), Value::Null);
+    }
+
+    #[test]
+    fn from_strings() {
+        assert_eq!(Value::from("hi"), Value::String(String::from("hi")));
+        assert_eq!(
+            Value::from(String::from("hi")),
+            Value::String(String::from("hi"))
+        );
+    }
+
+    #[test]
+    fn from_array_and_object() {
+        let v: Value = alloc::vec![Value::Null].into();
+        assert_eq!(v, Value::Array(alloc::vec![Value::Null]));
+
+        let mut map = Map::new();
+        map.insert(String::from("a"), Value::Null);
+        let v: Value = map.clone().into();
+        assert_eq!(v, Value::Object(map));
+    }
+
+    #[test]
+    fn from_option() {
+        let some: Value = Some(42u32).into();
+        assert_eq!(some, Value::Number(Number::from(42u32)));
+        let none: Value = Option::<u32>::None.into();
+        assert_eq!(none, Value::Null);
     }
 }
