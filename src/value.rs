@@ -318,6 +318,32 @@ impl core::ops::Index<usize> for Value {
     }
 }
 
+impl core::ops::IndexMut<&str> for Value {
+    /// Mutably indexes into an object by key. If `self` is `Value::Null`,
+    /// it's first promoted to an empty object; a missing key is inserted
+    /// as `Value::Null`. Panics if `self` is any other non-object variant.
+    fn index_mut(&mut self, key: &str) -> &mut Value {
+        if self.is_null() {
+            *self = Value::Object(Map::new());
+        }
+        match self {
+            Value::Object(map) => map.entry(String::from(key)).or_insert(Value::Null),
+            _ => panic!("cannot access key {key:?} of non-object Value"),
+        }
+    }
+}
+
+impl core::ops::IndexMut<usize> for Value {
+    /// Mutably indexes into an array by position. Panics if `self` isn't
+    /// an array, or if `index` is out of bounds.
+    fn index_mut(&mut self, index: usize) -> &mut Value {
+        match self {
+            Value::Array(arr) => &mut arr[index],
+            _ => panic!("cannot access index {index} of non-array Value"),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -477,6 +503,56 @@ mod tests {
         );
         assert_eq!(Value::Null.as_array_mut(), None);
         assert_eq!(Value::Null.as_object_mut(), None);
+    }
+
+    #[test]
+    fn index_mut_object_inserts_missing_key() {
+        let mut map = Map::new();
+        map.insert(String::from("a"), Value::Bool(true));
+        let mut obj = Value::Object(map);
+        obj["a"] = Value::Bool(false);
+        assert_eq!(obj["a"], Value::Bool(false));
+        obj["b"] = Value::Number(Number::from(1u64));
+        assert_eq!(obj["b"], Value::Number(Number::from(1u64)));
+    }
+
+    #[test]
+    fn index_mut_promotes_null_to_object() {
+        let mut v = Value::Null;
+        v["a"] = Value::Bool(true);
+        assert_eq!(v, {
+            let mut m = Map::new();
+            m.insert(String::from("a"), Value::Bool(true));
+            Value::Object(m)
+        });
+    }
+
+    #[test]
+    #[should_panic(expected = "non-object")]
+    fn index_mut_str_panics_on_non_object_non_null() {
+        let mut v = Value::Bool(true);
+        v["a"] = Value::Null;
+    }
+
+    #[test]
+    fn index_mut_array() {
+        let mut arr = Value::Array(alloc::vec![Value::Bool(false)]);
+        arr[0] = Value::Bool(true);
+        assert_eq!(arr[0], Value::Bool(true));
+    }
+
+    #[test]
+    #[should_panic(expected = "non-array")]
+    fn index_mut_usize_panics_on_non_array() {
+        let mut v = Value::Null;
+        v[0] = Value::Null;
+    }
+
+    #[test]
+    #[should_panic]
+    fn index_mut_usize_panics_out_of_bounds() {
+        let mut arr = Value::Array(Vec::new());
+        arr[0] = Value::Null;
     }
 
     #[test]
