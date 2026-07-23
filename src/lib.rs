@@ -13,7 +13,7 @@ mod parser;
 mod ser;
 mod value;
 
-pub use error::Error;
+pub use error::{Category, Error};
 pub use number::Number;
 pub use value::{Map, Value};
 
