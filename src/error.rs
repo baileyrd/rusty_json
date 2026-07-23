@@ -12,8 +12,8 @@ pub enum Category {
     /// Unreachable today (this crate has no typed deserialization yet);
     /// reserved for a future round.
     Data,
-    /// An I/O error occurred while reading input. Unreachable today (this
-    /// crate has no reader-based parsing yet); reserved for a future round.
+    /// An I/O error occurred while reading/writing JSON (`std` feature
+    /// only). Unreachable in a `no_std` build.
     Io,
 }
 
@@ -58,6 +58,18 @@ impl Error {
         }
     }
 
+    /// An I/O error that occurred while reading/writing JSON. Has no
+    /// meaningful position; `line()`/`column()` are `0`.
+    #[cfg_attr(not(feature = "std"), allow(dead_code))]
+    pub(crate) fn io(msg: impl Into<String>) -> Self {
+        Error {
+            msg: msg.into(),
+            line: 0,
+            column: 0,
+            category: Category::Io,
+        }
+    }
+
     /// The 1-based line at which the error occurred.
     pub fn line(&self) -> usize {
         self.line
@@ -89,13 +101,13 @@ impl Error {
     }
 
     /// True if JSON was well-formed but didn't match an expected data
-    /// shape. Always `false` today; reserved for a future round.
+    /// shape.
     pub fn is_data(&self) -> bool {
         self.category == Category::Data
     }
 
-    /// True if an I/O error occurred while reading input. Always `false`
-    /// today; reserved for a future round.
+    /// True if an I/O error occurred while reading/writing JSON (`std`
+    /// feature only).
     pub fn is_io(&self) -> bool {
         self.category == Category::Io
     }
@@ -125,6 +137,13 @@ impl serde::de::Error for Error {
 impl serde::ser::Error for Error {
     fn custom<T: fmt::Display>(msg: T) -> Self {
         Error::data(alloc::format!("{msg}"))
+    }
+}
+
+#[cfg(feature = "std")]
+impl From<std::io::Error> for Error {
+    fn from(e: std::io::Error) -> Self {
+        Error::io(alloc::format!("{e}"))
     }
 }
 
@@ -166,6 +185,16 @@ mod tests {
 
         let ser_err = <Error as serde::ser::Error>::custom("cannot serialize");
         assert!(ser_err.is_data());
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn io_error_converts_and_classifies_as_io() {
+        let io_err = std::io::Error::new(std::io::ErrorKind::BrokenPipe, "pipe closed");
+        let err: Error = io_err.into();
+        assert!(err.is_io());
+        assert_eq!(err.line(), 0);
+        assert_eq!(err.column(), 0);
     }
 
     #[cfg(feature = "std")]

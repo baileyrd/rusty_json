@@ -24,7 +24,10 @@ pub use value::{Map, Value};
 pub type Result<T> = core::result::Result<T, Error>;
 
 pub use de::{from_slice, from_str};
-pub use ser::{to_string, to_string_pretty};
+pub use ser::{to_string, to_string_pretty, to_vec, to_vec_pretty};
+
+#[cfg(feature = "std")]
+pub use ser::{to_writer, to_writer_pretty};
 
 /// Not public API. Re-exports used by the [`json!`] macro's expansion so it
 /// works from downstream crates without them needing `extern crate alloc`.
