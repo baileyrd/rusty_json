@@ -242,6 +242,30 @@ impl<T: Into<Value>> From<Option<T>> for Value {
     }
 }
 
+impl FromIterator<(String, Value)> for Value {
+    /// Collects key/value pairs into a `Value::Object`.
+    fn from_iter<I: IntoIterator<Item = (String, Value)>>(iter: I) -> Self {
+        Value::Object(iter.into_iter().collect())
+    }
+}
+
+impl FromIterator<Value> for Value {
+    /// Collects values into a `Value::Array`.
+    fn from_iter<I: IntoIterator<Item = Value>>(iter: I) -> Self {
+        Value::Array(iter.into_iter().collect())
+    }
+}
+
+impl core::str::FromStr for Value {
+    type Err = crate::Error;
+
+    /// Parses a JSON value from a string slice; delegates to
+    /// [`crate::from_str`].
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        crate::from_str(s)
+    }
+}
+
 impl core::ops::Index<&str> for Value {
     type Output = Value;
 
@@ -388,5 +412,31 @@ mod tests {
         assert_eq!(some, Value::Number(Number::from(42u32)));
         let none: Value = Option::<u32>::None.into();
         assert_eq!(none, Value::Null);
+    }
+
+    #[test]
+    fn from_iterator_array() {
+        let v: Value = alloc::vec![Value::Bool(true), Value::Null]
+            .into_iter()
+            .collect();
+        assert_eq!(v, Value::Array(alloc::vec![Value::Bool(true), Value::Null]));
+    }
+
+    #[test]
+    fn from_iterator_object() {
+        let v: Value = alloc::vec![(String::from("a"), Value::Bool(true))]
+            .into_iter()
+            .collect();
+        let mut expected = Map::new();
+        expected.insert(String::from("a"), Value::Bool(true));
+        assert_eq!(v, Value::Object(expected));
+    }
+
+    #[test]
+    fn from_str_impl() {
+        use core::str::FromStr;
+        assert_eq!(Value::from_str("null").unwrap(), Value::Null);
+        assert_eq!("true".parse::<Value>().unwrap(), Value::Bool(true));
+        assert!("not json".parse::<Value>().is_err());
     }
 }
